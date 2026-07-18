@@ -14,6 +14,10 @@
     "e2e": "bun run build && bun test --timeout=180000 ./tests/e2e/actual-bin.e2e.ts",
     "typecheck": "tsc --noEmit",
     "dev": "flue build --target node --watch",
+    "gui:dev": "npx --yes @native-sdk/cli dev gui --yes",
+    "gui:check": "npx --yes @native-sdk/cli check gui --strict",
+    "gui:test": "npx --yes @native-sdk/cli test gui --yes",
+    "gui:build": "npx --yes @native-sdk/cli build gui --yes",
     "website:dev": "bun run --cwd website dev",
     "website:build": "bun run --cwd website build"
   },

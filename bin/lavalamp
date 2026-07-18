@@ -13,6 +13,7 @@ lavalamp — AI coding harness
 
 USAGE:
   lavalamp                       Start interactive session in current directory
+  lavalamp gui                   Start native desktop GUI in current directory
   lavalamp -p "PROMPT"           Run a single prompt and exit
   lavalamp --repl                TUI-less interactive REPL (multi-turn, stdin pipe)
   lavalamp --simple              Plain stdin/stdout chat (no TUI rendering)
@@ -76,6 +77,9 @@ show_version() {
 
 # Handle subcommands before flag parsing
 case "${1:-}" in
+  gui|gui-host)
+    exec bun run "${REPO_DIR}/src/run.ts" "$@"
+    ;;
   login|logout|status)
     exec bun run "${REPO_DIR}/src/cli/auth.ts" "$@"
     ;;
@@ -268,4 +272,4 @@ if [ -n "$BACKEND" ]; then
   EXTRA_ARGS+=(--backend "$BACKEND")
 fi
 
-cd "$REPO_DIR" && PORT=48392 bun "${EXTRA_ARGS[@]}"
+cd "$REPO_DIR" && PORT="${PORT:-48392}" bun "${EXTRA_ARGS[@]}"

@@ -7,6 +7,8 @@ import { preflightInteractiveAuth } from './run/auth-preflight';
 import { runPrint } from './run/headless-print';
 import { runRepl } from './run/headless-repl';
 import { offerUpdate, runUpdateCommand } from './run/update';
+import { launchGui } from './run/gui';
+import { runGuiHost } from './gui-host/main';
 import { runAnalyticsCommand } from './analytics/cli';
 import packageJson from '../package.json' with { type: 'json' };
 import {
@@ -31,6 +33,9 @@ const workspaceRoot =
   process.cwd();
 const config = resolveConfig();
 const env = process.env as Record<string, string | undefined>;
+const configuredFlueModel =
+  env.LAVALAMP_MODEL ??
+  (config.defaultModel.length > 0 ? config.defaultModel : undefined);
 
 const subcommand = process.argv[2];
 const version = packageJson.version;
@@ -52,6 +57,17 @@ if (subcommand === 'config' || subcommand === 'models') {
   await import('./cli/config');
   process.exit(0);
 }
+if (subcommand === 'benchmark' || subcommand === 'benchmarks') {
+  const { runBenchmarkCommand } = await import('./cli/benchmark');
+  process.exit(
+    await runBenchmarkCommand({
+      args: process.argv.slice(3),
+      model: configuredFlueModel,
+      version,
+      workspaceRoot,
+    }),
+  );
+}
 
 const repoRoot = resolve(import.meta.dir, '..');
 let serverPath = join(repoRoot, 'dist', 'server.mjs');
@@ -61,6 +77,26 @@ if (!existsSync(serverPath)) {
   mkdirSync(dataDir, { recursive: true });
   serverPath = join(dataDir, 'server.mjs');
   writeFileSync(serverPath, serverCode, 'utf8');
+}
+
+if (subcommand === 'gui') {
+  process.exit(launchGui({ env, repoRoot, workspace: workspaceRoot }));
+}
+
+if (subcommand === 'gui-host') {
+  await preflightInteractiveAuth({
+    config,
+    env,
+    model: configuredFlueModel,
+    outputFormat: 'text',
+  });
+  await runGuiHost({
+    agentName: process.env.LAVALAMP_ASK === '1' ? 'explore' : 'build',
+    model: configuredFlueModel,
+    serverPath,
+    workspace: workspaceRoot,
+  });
+  process.exit(0);
 }
 
 function findFlag(flags: string[]): number {
@@ -94,6 +130,7 @@ if (helpIdx !== -1) {
 
 USAGE:
   lavalamp                       Start interactive session in current directory
+  lavalamp gui                   Start native desktop GUI in current directory
   lavalamp ask                   Start interactive read-only session to ask questions about the codebase
   lavalamp ask "PROMPT"          Ask a single question about the codebase and exit
   lavalamp -p "PROMPT"           Run a single prompt and exit
@@ -104,6 +141,8 @@ USAGE:
   lavalamp --model MODEL         Override default model
   lavalamp --backend BACKEND     Select flue or codex
   lavalamp models                List known models
+  lavalamp benchmark list        List public and custom benchmark data
+  lavalamp benchmark run SUITE   Run a public or custom benchmark
   lavalamp update                Download and install the latest release
   lavalamp config show           Show persisted config
   lavalamp config set KEY VALUE  Persist model/Gateway config

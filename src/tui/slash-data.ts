@@ -8,6 +8,7 @@ export const HELP_COMMANDS: [string, string][] = [
   ['/memory', 'Show project memory'],
   ['/model', 'Show/change model'],
   ['/models', 'Show/change model'],
+  ['/benchmarks', 'Browse benchmark catalog and runs'],
   ['/gateway', 'Show/change AI Gateway'],
   ['/usage', 'Show neuron meter'],
   ['/analytics', 'Show developer analytics'],

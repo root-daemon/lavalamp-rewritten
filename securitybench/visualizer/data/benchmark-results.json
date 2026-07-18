@@ -1,0 +1,38 @@
+{
+  "rankings": [
+    {
+      "model": "cloudflare-workers-ai/@cf/zai-org/glm-4.7-flash",
+      "correct": 7,
+      "incorrect": 1,
+      "errors": 0,
+      "totalTests": 8,
+      "successRate": 87.5,
+      "errorRate": 0,
+      "averageDuration": 13343,
+      "totalCost": 0,
+      "averageCostPerTest": 0,
+      "totalCompletionTokens": 0,
+      "tokensPerSecond": 0
+    }
+  ],
+  "metadata": {
+    "timestamp": "2026-07-18T08:23:05.726Z",
+    "totalModels": 1,
+    "totalTestsRun": 8,
+    "overallCorrect": 7,
+    "overallIncorrect": 1,
+    "overallErrors": 0,
+    "overallSuccessRate": 87.5,
+    "overallErrorRate": 0,
+    "totalCost": 0,
+    "averageCostPerTest": 0,
+    "config": {
+      "maxConcurrency": 1,
+      "testRunsPerModel": 1,
+      "timeoutSeconds": 400
+    },
+    "testSuite": "Security Analysis Benchmark Lite v1",
+    "suiteId": "security-analysis-lite-v1",
+    "version": "lavalamp-smoke-2026-07-18-network-strict-rescore"
+  }
+}

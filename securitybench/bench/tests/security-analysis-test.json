@@ -1,0 +1,272 @@
+{
+  "id": "security-analysis-v1",
+  "name": "Security Analysis Benchmark v1",
+  "description": "Evaluates vulnerability detection, false-positive resistance, exploit-path tracing, and remediation selection across four web-security CWEs.",
+  "system_prompt": "You are evaluating application security code. Follow the requested response format exactly and return only the requested verdict or option token. Analyze actual attacker-controlled data flow, security boundaries, dangerous sinks, and whether the proposed defense preserves functionality. Do not add explanations.",
+  "tests": [
+    {
+      "id": "sqli-detect-vulnerable",
+      "axis": "detection",
+      "cwe": "CWE-89",
+      "rationale": "The request-controlled email value is concatenated into SQL text before the database executes it.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-89 true-positive source-to-SQL-sink pattern with direct string construction."
+      },
+      "prompt": "Classify this Express handler. Assume req.query.email is attacker-controlled and db.query executes PostgreSQL text exactly as supplied.\n\nconst email = String(req.query.email ?? '');\nconst result = await db.query(\n  'SELECT id, email FROM users WHERE email = \\' ' + email + ' \\' '\n);\nres.json(result.rows);\n\nIf vulnerable, return exactly: VERDICT: VULNERABLE; CWE: CWE-N\nIf safe, return exactly: VERDICT: SAFE",
+      "answers": ["VERDICT: VULNERABLE; CWE: CWE-89"],
+      "negative_answers": [
+        "VERDICT: SAFE",
+        "VERDICT: VULNERABLE; CWE: CWE-78",
+        "VERDICT: VULNERABLE; CWE: CWE-22",
+        "VERDICT: VULNERABLE; CWE: CWE-79"
+      ]
+    },
+    {
+      "id": "sqli-safe-twin",
+      "axis": "safe-twin",
+      "cwe": "CWE-89",
+      "rationale": "The SQL statement remains constant and the attacker-controlled email is passed only as a bound parameter.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-89 false-positive control using a prepared statement and bound request data."
+      },
+      "prompt": "Classify this Express handler. Assume req.query.email is attacker-controlled and db.query implements PostgreSQL parameter binding for $1.\n\nconst email = String(req.query.email ?? '');\nconst result = await db.query(\n  'SELECT id, email FROM users WHERE email = $1',\n  [email]\n);\nres.json(result.rows);\n\nIf vulnerable, return exactly: VERDICT: VULNERABLE; CWE: CWE-N\nIf safe, return exactly: VERDICT: SAFE",
+      "answers": ["VERDICT: SAFE"],
+      "negative_answers": [
+        "VERDICT: VULNERABLE",
+        "CWE: CWE-89",
+        "CWE: CWE-78",
+        "CWE: CWE-22",
+        "CWE: CWE-79"
+      ]
+    },
+    {
+      "id": "sqli-exploit-trace",
+      "axis": "exploit-trace",
+      "cwe": "CWE-89",
+      "rationale": "Only option B follows the attacker-controlled query parameter through SQL string construction into the database execution sink.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-89 source-to-sink trace derived from executable SQL injection test patterns."
+      },
+      "prompt": "Choose the only correct exploit-path trace for this handler.\n\nconst email = String(req.query.email ?? '');\nconst sql = 'SELECT id FROM users WHERE email = \\' ' + email + ' \\' ';\nconst result = await db.query(sql);\nres.json(result.rows);\n\nOPTION_A: res.json is the attacker-controlled source; result.rows modifies the SQL statement; db.query is only a formatter.\nOPTION_B: req.query.email is attacker-controlled; concatenation changes SQL syntax; db.query executes the resulting statement.\nOPTION_C: The static SELECT keyword is attacker-controlled; String blocks metacharacters; res.json executes the query.\n\nReturn exactly one token: EXPLOIT_PATH: OPTION_A, EXPLOIT_PATH: OPTION_B, or EXPLOIT_PATH: OPTION_C",
+      "answers": ["EXPLOIT_PATH: OPTION_B"],
+      "negative_answers": [
+        "EXPLOIT_PATH: OPTION_A",
+        "EXPLOIT_PATH: OPTION_C"
+      ]
+    },
+    {
+      "id": "sqli-remediation",
+      "axis": "remediation",
+      "cwe": "CWE-89",
+      "rationale": "Option A removes SQL syntax control by keeping query text constant and binding the email value separately.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-89 remediation using parameterized SQL while preserving lookup behavior."
+      },
+      "prompt": "Choose the only patch that prevents SQL injection while preserving lookup by arbitrary email address.\n\nVulnerable code:\nconst email = String(req.query.email ?? '');\nconst rows = await db.query('SELECT id FROM users WHERE email = \\' ' + email + ' \\' ');\n\nOPTION_A:\nconst email = String(req.query.email ?? '');\nconst rows = await db.query('SELECT id FROM users WHERE email = $1', [email]);\n\nOPTION_B:\nconst email = String(req.query.email ?? '').replace(\"'\", '');\nconst rows = await db.query('SELECT id FROM users WHERE email = \\' ' + email + ' \\' ');\n\nOPTION_C:\nconst email = String(req.query.email ?? '');\nconst rows = await db.query('SELECT id FROM users WHERE email = \\' ' + email + ' \\' ');\nif (email.includes(\"'\")) throw new Error('invalid');\n\nReturn exactly one token: PATCH: OPTION_A, PATCH: OPTION_B, or PATCH: OPTION_C",
+      "answers": ["PATCH: OPTION_A"],
+      "negative_answers": ["PATCH: OPTION_B", "PATCH: OPTION_C"]
+    },
+    {
+      "id": "command-detect-vulnerable",
+      "axis": "detection",
+      "cwe": "CWE-78",
+      "rationale": "The request-controlled archive name is inserted into a shell command interpreted by exec.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-78 true-positive request-source to shell-command sink pattern."
+      },
+      "prompt": "Classify this Express handler. Assume req.body.archive is attacker-controlled, folder is the fixed string /srv/reports, and exec invokes /bin/sh.\n\nconst archive = String(req.body.archive ?? '');\nconst folder = '/srv/reports';\nexec('tar -czf /tmp/' + archive + '.tgz ' + folder, callback);\n\nIf vulnerable, return exactly: VERDICT: VULNERABLE; CWE: CWE-N\nIf safe, return exactly: VERDICT: SAFE",
+      "answers": ["VERDICT: VULNERABLE; CWE: CWE-78"],
+      "negative_answers": [
+        "VERDICT: SAFE",
+        "VERDICT: VULNERABLE; CWE: CWE-89",
+        "VERDICT: VULNERABLE; CWE: CWE-22",
+        "VERDICT: VULNERABLE; CWE: CWE-79"
+      ]
+    },
+    {
+      "id": "command-safe-twin",
+      "axis": "safe-twin",
+      "cwe": "CWE-78",
+      "rationale": "The archive name is allowlisted and passed as a distinct argument to tar without shell interpretation.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-78 false-positive control using non-shell execution and finite-domain validation."
+      },
+      "prompt": "Classify this Express handler. Assume execFile invokes tar directly without a shell and folder is the fixed string /srv/reports.\n\nconst archive = String(req.body.archive ?? '');\nif (!/^[a-z0-9_-]{1,40}$/i.test(archive)) {\n  return res.status(400).end();\n}\nconst folder = '/srv/reports';\nexecFile('tar', ['-czf', '/tmp/' + archive + '.tgz', folder], callback);\n\nIf vulnerable, return exactly: VERDICT: VULNERABLE; CWE: CWE-N\nIf safe, return exactly: VERDICT: SAFE",
+      "answers": ["VERDICT: SAFE"],
+      "negative_answers": [
+        "VERDICT: VULNERABLE",
+        "CWE: CWE-89",
+        "CWE: CWE-78",
+        "CWE: CWE-22",
+        "CWE: CWE-79"
+      ]
+    },
+    {
+      "id": "command-exploit-trace",
+      "axis": "exploit-trace",
+      "cwe": "CWE-78",
+      "rationale": "Only option C traces the request body through command-string concatenation into a shell-interpreted exec call.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-78 source-to-sink trace derived from executable command injection patterns."
+      },
+      "prompt": "Choose the only correct exploit-path trace for this handler. Assume exec invokes /bin/sh.\n\nconst archive = String(req.body.archive ?? '');\nconst command = 'tar -czf /tmp/' + archive + '.tgz /srv/reports';\nexec(command, callback);\n\nOPTION_A: callback controls archive; tar sanitizes shell syntax; req.body is only used after execution.\nOPTION_B: The fixed /srv/reports path is attacker-controlled; String executes shell syntax; callback launches tar.\nOPTION_C: req.body.archive is attacker-controlled; concatenation places it in shell command text; exec asks the shell to interpret it.\n\nReturn exactly one token: EXPLOIT_PATH: OPTION_A, EXPLOIT_PATH: OPTION_B, or EXPLOIT_PATH: OPTION_C",
+      "answers": ["EXPLOIT_PATH: OPTION_C"],
+      "negative_answers": [
+        "EXPLOIT_PATH: OPTION_A",
+        "EXPLOIT_PATH: OPTION_B"
+      ]
+    },
+    {
+      "id": "command-remediation",
+      "axis": "remediation",
+      "cwe": "CWE-78",
+      "rationale": "Option A validates the finite archive-name domain and removes shell parsing by separating executable arguments.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-78 remediation using allowlist validation and direct process execution."
+      },
+      "prompt": "Choose the only patch that prevents command injection while still creating a named tar archive.\n\nVulnerable code:\nconst archive = String(req.body.archive ?? '');\nexec('tar -czf /tmp/' + archive + '.tgz /srv/reports', callback);\n\nOPTION_A:\nconst archive = String(req.body.archive ?? '');\nif (!/^[a-z0-9_-]{1,40}$/i.test(archive)) return res.status(400).end();\nexecFile('tar', ['-czf', '/tmp/' + archive + '.tgz', '/srv/reports'], callback);\n\nOPTION_B:\nconst archive = String(req.body.archive ?? '').replace(';', '');\nexec('tar -czf /tmp/' + archive + '.tgz /srv/reports', callback);\n\nOPTION_C:\nconst archive = String(req.body.archive ?? '');\nexec('tar -czf /tmp/' + archive + '.tgz /srv/reports', callback);\nif (/[;&|]/.test(archive)) return res.status(400).end();\n\nReturn exactly one token: PATCH: OPTION_A, PATCH: OPTION_B, or PATCH: OPTION_C",
+      "answers": ["PATCH: OPTION_A"],
+      "negative_answers": ["PATCH: OPTION_B", "PATCH: OPTION_C"]
+    },
+    {
+      "id": "path-detect-vulnerable",
+      "axis": "detection",
+      "cwe": "CWE-22",
+      "rationale": "The request-controlled filename can escape the upload root before readFile accesses the resulting path.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-22 true-positive request-path to filesystem-read sink pattern."
+      },
+      "prompt": "Classify this Express handler. Assume req.params.name is attacker-controlled, UPLOAD_ROOT is /srv/uploads, and the host uses POSIX paths.\n\nconst requested = String(req.params.name ?? '');\nconst filePath = path.join(UPLOAD_ROOT, requested);\nconst data = await fs.readFile(filePath);\nres.send(data);\n\nIf vulnerable, return exactly: VERDICT: VULNERABLE; CWE: CWE-N\nIf safe, return exactly: VERDICT: SAFE",
+      "answers": ["VERDICT: VULNERABLE; CWE: CWE-22"],
+      "negative_answers": [
+        "VERDICT: SAFE",
+        "VERDICT: VULNERABLE; CWE: CWE-89",
+        "VERDICT: VULNERABLE; CWE: CWE-78",
+        "VERDICT: VULNERABLE; CWE: CWE-79"
+      ]
+    },
+    {
+      "id": "path-safe-twin",
+      "axis": "safe-twin",
+      "cwe": "CWE-22",
+      "rationale": "The canonical candidate must remain below the separator-aware canonical root before file access.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-22 false-positive control using canonical path containment before the sink."
+      },
+      "prompt": "Classify this Express handler. Assume req.params.name is attacker-controlled, UPLOAD_ROOT is /srv/uploads, the host uses POSIX paths, and no symlinks exist below UPLOAD_ROOT.\n\nconst requested = String(req.params.name ?? '');\nconst root = path.resolve(UPLOAD_ROOT);\nconst candidate = path.resolve(root, requested);\nif (!candidate.startsWith(root + path.sep)) {\n  return res.status(403).end();\n}\nconst data = await fs.readFile(candidate);\nres.send(data);\n\nIf vulnerable, return exactly: VERDICT: VULNERABLE; CWE: CWE-N\nIf safe, return exactly: VERDICT: SAFE",
+      "answers": ["VERDICT: SAFE"],
+      "negative_answers": [
+        "VERDICT: VULNERABLE",
+        "CWE: CWE-89",
+        "CWE: CWE-78",
+        "CWE: CWE-22",
+        "CWE: CWE-79"
+      ]
+    },
+    {
+      "id": "path-exploit-trace",
+      "axis": "exploit-trace",
+      "cwe": "CWE-22",
+      "rationale": "Only option A follows the route parameter through path resolution to an unrestricted filesystem read.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-22 source-to-sink trace derived from executable path traversal patterns."
+      },
+      "prompt": "Choose the only correct exploit-path trace. Assume UPLOAD_ROOT is /srv/uploads on a POSIX host.\n\nconst requested = String(req.params.name ?? '');\nconst filePath = path.join(UPLOAD_ROOT, requested);\nconst data = await fs.readFile(filePath);\nres.send(data);\n\nOPTION_A: req.params.name is attacker-controlled; traversal segments can move filePath outside UPLOAD_ROOT; fs.readFile accesses the escaped path.\nOPTION_B: res.send is the path source; fs.readFile canonicalizes and enforces UPLOAD_ROOT automatically; path.join rejects traversal.\nOPTION_C: UPLOAD_ROOT is attacker-controlled; String removes path separators; req.params.name is used only after the read.\n\nReturn exactly one token: EXPLOIT_PATH: OPTION_A, EXPLOIT_PATH: OPTION_B, or EXPLOIT_PATH: OPTION_C",
+      "answers": ["EXPLOIT_PATH: OPTION_A"],
+      "negative_answers": [
+        "EXPLOIT_PATH: OPTION_B",
+        "EXPLOIT_PATH: OPTION_C"
+      ]
+    },
+    {
+      "id": "path-remediation",
+      "axis": "remediation",
+      "cwe": "CWE-22",
+      "rationale": "Option C canonicalizes both paths and rejects candidates outside the separator-aware root before reading.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-22 remediation using canonical containment while preserving file download behavior."
+      },
+      "prompt": "Choose the only patch that blocks path traversal while preserving downloads below UPLOAD_ROOT. Assume POSIX paths and no symlinks below the root.\n\nVulnerable code:\nconst requested = String(req.params.name ?? '');\nconst data = await fs.readFile(path.join(UPLOAD_ROOT, requested));\n\nOPTION_A:\nconst requested = String(req.params.name ?? '').replace('..', '');\nconst data = await fs.readFile(path.join(UPLOAD_ROOT, requested));\n\nOPTION_B:\nconst requested = String(req.params.name ?? '');\nconst candidate = path.join(UPLOAD_ROOT, requested);\nconst data = await fs.readFile(candidate);\nif (!candidate.startsWith(UPLOAD_ROOT)) throw new Error('outside root');\n\nOPTION_C:\nconst requested = String(req.params.name ?? '');\nconst root = path.resolve(UPLOAD_ROOT);\nconst candidate = path.resolve(root, requested);\nif (!candidate.startsWith(root + path.sep)) throw new Error('outside root');\nconst data = await fs.readFile(candidate);\n\nReturn exactly one token: PATCH: OPTION_A, PATCH: OPTION_B, or PATCH: OPTION_C",
+      "answers": ["PATCH: OPTION_C"],
+      "negative_answers": ["PATCH: OPTION_A", "PATCH: OPTION_B"]
+    },
+    {
+      "id": "xss-detect-vulnerable",
+      "axis": "detection",
+      "cwe": "CWE-79",
+      "rationale": "The request-controlled search term is inserted into an HTML text context without output encoding.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-79 true-positive request-source to HTML-response sink pattern."
+      },
+      "prompt": "Classify this Express handler. Assume req.query.term is attacker-controlled and res.type('html').send returns the supplied string as an HTML document.\n\nconst term = String(req.query.term ?? '');\nres.type('html').send('<p>Search: ' + term + '</p>');\n\nIf vulnerable, return exactly: VERDICT: VULNERABLE; CWE: CWE-N\nIf safe, return exactly: VERDICT: SAFE",
+      "answers": ["VERDICT: VULNERABLE; CWE: CWE-79"],
+      "negative_answers": [
+        "VERDICT: SAFE",
+        "VERDICT: VULNERABLE; CWE: CWE-89",
+        "VERDICT: VULNERABLE; CWE: CWE-78",
+        "VERDICT: VULNERABLE; CWE: CWE-22"
+      ]
+    },
+    {
+      "id": "xss-safe-twin",
+      "axis": "safe-twin",
+      "cwe": "CWE-79",
+      "rationale": "Every HTML-text metacharacter is encoded before the request value enters the HTML response.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-79 false-positive control using context-appropriate HTML text encoding."
+      },
+      "prompt": "Classify this Express handler. Assume req.query.term is attacker-controlled and escapeHtml is defined exactly as shown.\n\nfunction escapeHtml(value: string) {\n  return value\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\nconst term = escapeHtml(String(req.query.term ?? ''));\nres.type('html').send('<p>Search: ' + term + '</p>');\n\nIf vulnerable, return exactly: VERDICT: VULNERABLE; CWE: CWE-N\nIf safe, return exactly: VERDICT: SAFE",
+      "answers": ["VERDICT: SAFE"],
+      "negative_answers": [
+        "VERDICT: VULNERABLE",
+        "CWE: CWE-89",
+        "CWE: CWE-78",
+        "CWE: CWE-22",
+        "CWE: CWE-79"
+      ]
+    },
+    {
+      "id": "xss-exploit-trace",
+      "axis": "exploit-trace",
+      "cwe": "CWE-79",
+      "rationale": "Only option B follows the request query value into an unencoded HTML response interpreted by the browser.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-79 source-to-sink trace derived from reflected XSS patterns."
+      },
+      "prompt": "Choose the only correct exploit-path trace for this handler.\n\nconst term = String(req.query.term ?? '');\nconst page = '<p>Search: ' + term + '</p>';\nres.type('html').send(page);\n\nOPTION_A: The static p element is attacker-controlled; String performs HTML encoding; res.type prevents browser parsing.\nOPTION_B: req.query.term is attacker-controlled; concatenation inserts it without HTML encoding; the browser interprets the response as HTML.\nOPTION_C: res.send is the source; page sanitizes term automatically; req.query.term is used only as plain text after rendering.\n\nReturn exactly one token: EXPLOIT_PATH: OPTION_A, EXPLOIT_PATH: OPTION_B, or EXPLOIT_PATH: OPTION_C",
+      "answers": ["EXPLOIT_PATH: OPTION_B"],
+      "negative_answers": [
+        "EXPLOIT_PATH: OPTION_A",
+        "EXPLOIT_PATH: OPTION_C"
+      ]
+    },
+    {
+      "id": "xss-remediation",
+      "axis": "remediation",
+      "cwe": "CWE-79",
+      "rationale": "Option C performs HTML-text encoding before interpolation while preserving the visible search term.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-79 remediation using context-aware output encoding without removing functionality."
+      },
+      "prompt": "Choose the only patch that prevents reflected XSS while preserving the visible search term as HTML text.\n\nVulnerable code:\nconst term = String(req.query.term ?? '');\nres.type('html').send('<p>Search: ' + term + '</p>');\n\nOPTION_A:\nconst term = String(req.query.term ?? '').replace(/<script>/gi, '');\nres.type('html').send('<p>Search: ' + term + '</p>');\n\nOPTION_B:\nconst term = encodeURIComponent(String(req.query.term ?? ''));\nres.type('html').send('<p>Search: ' + term + '</p>');\n\nOPTION_C:\nconst term = escapeHtml(String(req.query.term ?? ''));\nres.type('html').send('<p>Search: ' + term + '</p>');\n\nAssume escapeHtml encodes &, <, >, double quote, and single quote for HTML text.\nReturn exactly one token: PATCH: OPTION_A, PATCH: OPTION_B, or PATCH: OPTION_C",
+      "answers": ["PATCH: OPTION_C"],
+      "negative_answers": ["PATCH: OPTION_A", "PATCH: OPTION_B"]
+    }
+  ]
+}

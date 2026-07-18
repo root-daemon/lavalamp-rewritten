@@ -1,0 +1,164 @@
+<row background="background">
+  <panel width="248" padding="0">
+    <column grow="1">
+      <row height="62" padding="16" gap="10" cross="center" background="surface" window-drag="true">
+        <icon name="circle-dot" size="sm" />
+        <text grow="1">Lavalamp</text>
+      </row>
+      <separator />
+      <column padding="12" gap="12" grow="1">
+        <button variant="primary" on-press="new_chat">+ New chat</button>
+        <text foreground="text_muted">RECENT</text>
+        <scroll grow="1">
+          <column gap="4">
+            <for each="sessionItems" key="key" as="session">
+              <button variant="ghost" size="sm">{session.prompt}</button>
+            </for>
+          </column>
+        </scroll>
+      </column>
+      <separator />
+      <column padding="14" gap="4">
+        <text wrap="true">{workspaceLabel}</text>
+        <text foreground="text_muted">{modelLabel}</text>
+      </column>
+    </column>
+  </panel>
+  <separator />
+
+  <column grow="1" background="background">
+    <row height="62" padding="16" gap="10" cross="center" window-drag="true">
+      <column gap="2" grow="1">
+        <text>Agent session</text>
+        <text foreground="text_muted">{workspaceLabel}</text>
+      </column>
+      <badge>{connectionLabel}</badge>
+      <button size="sm" variant="ghost" on-press="new_chat">Clear</button>
+    </row>
+    <separator />
+
+    <scroll grow="1">
+      <column padding="28" gap="20">
+        <if test="{hasError}">
+          <alert variant="destructive">{errorText}</alert>
+        </if>
+        <if test="{emptyState}">
+          <column gap="12" main="center" cross="center" grow="1">
+            <icon name="wrench" size="lg" />
+            <text>Lavalamp ready to build.</text>
+            <text foreground="text_muted">Ask about code, ship feature, or inspect workspace.</text>
+          </column>
+        </if>
+        <for each="messageItems" key="id" as="message">
+          <if test="{message.isUser}">
+            <row main="end">
+              <card size="sm" width="560" padding="14">
+                <text wrap="true">{message.content}</text>
+              </card>
+            </row>
+          </if>
+          <else>
+            <column gap="8">
+              <row gap="8" cross="center">
+                <icon name="circle-dot" size="sm" />
+                <text>Lavalamp</text>
+              </row>
+              <markdown source="{message.content}"></markdown>
+            </column>
+          </else>
+        </for>
+        <if test="{processing}">
+          <row gap="8" cross="center">
+            <spinner size="sm" />
+            <text foreground="text_muted">Working…</text>
+          </row>
+        </if>
+        <if test="{hasThinking}">
+          <accordion>
+            <text>Reasoning</text>
+            <text wrap="true" foreground="text_muted">{thinkingText}</text>
+          </accordion>
+        </if>
+        <if test="{permission_pending}">
+          <card padding="16">
+            <column gap="12">
+              <row gap="8" cross="center">
+                <icon name="alert" size="sm" />
+                <text>Permission required · {permissionTool}</text>
+              </row>
+              <row gap="8">
+                <button variant="primary" on-press="allow_permission">Allow</button>
+                <button variant="secondary" on-press="always_allow_permission">Always allow</button>
+                <button variant="ghost" on-press="deny_permission">Deny</button>
+              </row>
+            </column>
+          </card>
+        </if>
+      </column>
+    </scroll>
+
+    <column padding="16" gap="8">
+      <card padding="10">
+        <column gap="8">
+          <textarea height="92" grow="1" text="{draftText}" placeholder="Ask Lavalamp to build, inspect, or fix…" on-input="draft_edit" on-submit="send" label="Message" />
+          <row gap="8" cross="center">
+            <text grow="1" foreground="text_muted">Primary + Enter sends · permissions stay interactive</text>
+            <button variant="primary" disabled="{sendDisabled}" on-press="send">Send</button>
+          </row>
+        </column>
+      </card>
+    </column>
+  </column>
+
+  <separator />
+  <panel width="300" padding="0">
+    <column grow="1">
+      <row height="62" padding="16" cross="center" window-drag="true">
+        <text>Activity</text>
+      </row>
+      <separator />
+      <scroll grow="1">
+        <column padding="16" gap="16">
+          <column gap="6">
+            <text foreground="text_muted">ROUTE</text>
+            <text>{modelLabel}</text>
+            <text foreground="text_muted">{providerLabel}</text>
+          </column>
+          <separator />
+          <column gap="8">
+            <text foreground="text_muted">TOOLS</text>
+            <for each="toolItems" key="id" as="tool">
+              <panel padding="10">
+                <column gap="4">
+                  <row gap="6">
+                    <text grow="1">{tool.name}</text>
+                    <badge>{tool.status}</badge>
+                  </row>
+                  <text wrap="true" foreground="text_muted">{tool.summary}</text>
+                </column>
+              </panel>
+            </for>
+          </column>
+          <if test="{hasTerminal}">
+            <separator />
+            <column gap="6">
+              <text foreground="text_muted">TERMINAL</text>
+              <text wrap="true">{terminalText}</text>
+            </column>
+          </if>
+          <separator />
+          <row gap="8">
+            <column grow="1" gap="2">
+              <text foreground="text_muted">TOKENS</text>
+              <text>{total_tokens}</text>
+            </column>
+            <column grow="1" gap="2">
+              <text foreground="text_muted">COST</text>
+              <text>${total_cost}</text>
+            </column>
+          </row>
+        </column>
+      </scroll>
+    </column>
+  </panel>
+</row>

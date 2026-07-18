@@ -36,6 +36,17 @@ curl -fsSL https://lavalamp.marban.lol/install.sh | bash
 **How the installer works:**
 The script supports Linux and macOS, detects the architecture (including Rosetta translation), verifies a matching published checksum when available, and installs the standalone binary in `~/.agents/bin/`. The installed binary does not require Bun. Native Windows installation is not currently supported.
 
+### Native desktop GUI
+
+Lavalamp also ships an additive native desktop client. Existing TUI remains default and unchanged. GUI uses same Flue runtime, sessions, models, streaming tool activity, cancellation, and permission flow through authenticated loopback host.
+
+```bash
+bun run gui:build
+lavalamp gui
+```
+
+Use `LAVALAMP_GUI_BINARY=/absolute/path/to/lavalamp-gui` to launch custom GUI build. Native app follows current workspace or `LAVALAMP_WORKSPACE`.
+
 Alternatively, build from source:
 ```bash
 git clone https://github.com/rahuletto/lavalamp.git
@@ -82,9 +93,34 @@ lavalamp [command/flag]
 | `lavalamp ask "your question"` | Ask a single question about the codebase and exit. |
 | `lavalamp models` | List known models, context window sizes, and capabilities. |
 | `lavalamp models --backend codex` | List the models and reasoning efforts reported by Codex. |
+| `lavalamp benchmark list` | Fetch or list cached public benchmark metadata and leaderboards. |
+| `lavalamp benchmark init <name>` | Scaffold a repository-owned Harbor benchmark. |
+| `lavalamp benchmark run <suite>` | Run a public or custom suite with one or more agent profiles. |
 | `lavalamp config show` | Print current configuration (default model, AI Gateway status). |
 | `lavalamp config set <key> <value>` | Update settings (e.g. `lavalamp config set model <model-id>`). |
 | `lavalamp analytics` | Show local cost, performance, reliability, tool, and outcome analytics. |
+
+### Benchmark lab
+
+The benchmark catalog refreshes Terminal-Bench 2, SWE Atlas QnA, and
+CursorBench from their official sources. CursorBench is reference-only because
+its tasks are private; the other two can run through Harbor.
+
+```bash
+lavalamp benchmark refresh
+lavalamp benchmark show terminal-bench-2
+lavalamp benchmark init project-regressions
+lavalamp benchmark validate project-regressions
+lavalamp benchmark run project-regressions \
+  --profile baseline --profile optimized --sample 5 --seed 42 --analyze
+lavalamp benchmark results
+```
+
+Custom suites live in `benchmarks/<name>/` using Harbor's `dataset.toml` and
+task layout. Named profiles may be stored in `benchmarks/profiles/<name>.json`;
+they control `retrieval`, `workflow`, `orchestration`, and `budget` only for the
+benchmark process. Use `--output-format json` for scriptable results, or open
+`/benchmarks` in the TUI for the split-view browser.
 
 ### CLI Flags
 
@@ -121,6 +157,7 @@ Type these commands directly into the prompt input box:
 * `/rate helpful` or `/rate unhelpful` - Optionally rate the current run.
 * `/memory` - View or update the persistent project memory.
 * `/model` - List or switch the active model.
+* `/benchmarks` - Browse public benchmark data, custom suites, and saved runs.
 * `/workspace` - Change the workspace directory.
 * `/skills` - List or load customized skills from `.agents/skills`.
 * `/permissions` - View or update your security rules.
