@@ -1,0 +1,5 @@
+{
+  "name": "config-precedence-task",
+  "private": true,
+  "type": "module"
+}

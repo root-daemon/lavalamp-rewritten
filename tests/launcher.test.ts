@@ -65,4 +65,25 @@ describe('Bash launcher', () => {
     expect(result).toMatchObject({ exitCode: 0, stderr: '' });
     expect(result.args).toEqual(['src/run.ts', '--backend', 'codex']);
   });
+
+  for (const command of ['benchmark', 'benchmarks']) {
+    test(`routes the ${command} subcommand to the runtime`, async () => {
+      const result = await launch(
+        command,
+        'list',
+        '--output-format',
+        'json',
+      );
+
+      expect(result).toMatchObject({ exitCode: 0, stderr: '' });
+      expect(result.args).toEqual([
+        'run',
+        join(root, 'src', 'run.ts'),
+        command,
+        'list',
+        '--output-format',
+        'json',
+      ]);
+    });
+  }
 });

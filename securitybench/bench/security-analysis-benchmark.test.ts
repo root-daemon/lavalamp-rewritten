@@ -23,6 +23,27 @@ type SecuritySuite = {
   tests: SecurityCase[];
 };
 
+type LavalampQualityCase = {
+  id: string;
+  category:
+    | "discovery"
+    | "editing"
+    | "verification"
+    | "benchmark-safety";
+  rationale: string;
+  prompt: string;
+  answers: string[];
+  negative_answers: string[];
+};
+
+type LavalampQualitySuite = {
+  id: string;
+  name: string;
+  description: string;
+  system_prompt: string;
+  tests: LavalampQualityCase[];
+};
+
 const expectedFullAnswers = {
   "sqli-detect-vulnerable": "VERDICT: VULNERABLE; CWE: CWE-89",
   "sqli-safe-twin": "VERDICT: SAFE",
@@ -42,9 +63,16 @@ const expectedFullAnswers = {
   "xss-remediation": "PATCH: OPTION_C",
 } as const;
 
-async function loadSuite(filename: string): Promise<SecuritySuite> {
+const expectedLavalampAnswers = {
+  "repository-discovery": "ACTION: SEARCH_FIRST",
+  "scoped-editing": "ACTION: PRESERVE_UNRELATED",
+  "targeted-verification": "ACTION: TARGETED_THEN_FULL",
+  "bounded-benchmark-run": "ACTION: BOUND_MODEL_AND_RUNS",
+} as const;
+
+async function loadSuite<T = SecuritySuite>(filename: string): Promise<T> {
   const raw = await readFile(join(import.meta.dir, "tests", filename), "utf8");
-  return JSON.parse(raw) as SecuritySuite;
+  return JSON.parse(raw) as T;
 }
 
 function countsBy<T extends string>(values: T[]) {
@@ -55,15 +83,50 @@ function countsBy<T extends string>(values: T[]) {
 }
 
 describe("Security Analysis Benchmark datasets", () => {
-  test("contains only the full and lite security suites", async () => {
+  test("contains the security and Lavalamp quality suites", async () => {
     const files = (await readdir(join(import.meta.dir, "tests")))
       .filter((file) => file.endsWith(".json"))
       .sort();
 
     expect(files).toEqual([
+      "lavalamp-quality-test.json",
       "security-analysis-lite-test.json",
       "security-analysis-test.json",
     ]);
+  });
+
+  test("Lavalamp quality suite has deterministic ground truth", async () => {
+    const suite = await loadSuite<LavalampQualitySuite>(
+      "lavalamp-quality-test.json"
+    );
+    const expectedIds = Object.keys(expectedLavalampAnswers);
+
+    expect(suite.id).toBe("lavalamp-quality-v1");
+    expect(suite.name).toBe("Lavalamp Quality Benchmark v1");
+    expect(suite.tests).toHaveLength(4);
+    expect(new Set(suite.tests.map((item) => item.id)).size).toBe(4);
+    expect(suite.tests.map((item) => item.id).sort()).toEqual(
+      expectedIds.sort()
+    );
+    expect(countsBy(suite.tests.map((item) => item.category))).toEqual({
+      discovery: 1,
+      editing: 1,
+      verification: 1,
+      "benchmark-safety": 1,
+    });
+
+    for (const item of suite.tests) {
+      expect(item.answers).toEqual([
+        expectedLavalampAnswers[
+          item.id as keyof typeof expectedLavalampAnswers
+        ],
+      ]);
+      expect(item.negative_answers).toHaveLength(2);
+      expect(new Set(item.negative_answers).size).toBe(2);
+      expect(item.negative_answers).not.toContain(item.answers[0]);
+      expect(item.rationale.trim().length).toBeGreaterThan(20);
+      expect(item.prompt.match(/OPTION_[ABC]:/g)).toHaveLength(3);
+    }
   });
 
   test("full suite has complete balanced ground truth", async () => {
