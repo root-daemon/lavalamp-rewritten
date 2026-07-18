@@ -1,8 +1,10 @@
 import { type LanguageModel } from "ai";
 import { openrouter } from "@openrouter/ai-sdk-provider";
 import {
+  resolveLavalampModelIds,
   resolveMaxConcurrency,
   resolveRunnerBackend,
+  resolveTestRuns,
 } from "./runner-backend";
 
 export const OUTPUT_DIRECTORY = "./results";
@@ -11,14 +13,16 @@ export const MAX_CONCURRENCY = resolveMaxConcurrency(
   resolveRunnerBackend(process.env.SECURITYBENCH_RUNNER),
   process.env.SECURITYBENCH_MAX_CONCURRENCY
 );
-export const TEST_RUNS_PER_MODEL = 30;
+export const TEST_RUNS_PER_MODEL = resolveTestRuns(
+  process.env.SECURITYBENCH_TEST_RUNS
+);
 export const TIMEOUT_SECONDS = 400;
 export const STAGGER_DELAY_MS = 150;
 
 export type RunnableModel = {
   name: string;
   modelId: string;
-  llm: LanguageModel;
+  llm?: LanguageModel;
   providerOptions?: any;
   reasoning?: boolean;
 };
@@ -30,7 +34,7 @@ const defaultProviderOptions = {
   },
 };
 
-export const modelsToRun: RunnableModel[] = [
+const defaultModels: RunnableModel[] = [
   // Open weight
   {
     name: "kimi-k2-thinking",
@@ -265,3 +269,13 @@ export const modelsToRun: RunnableModel[] = [
     reasoning: true,
   },
 ];
+
+const backend = resolveRunnerBackend(process.env.SECURITYBENCH_RUNNER);
+const lavalampModelIds = resolveLavalampModelIds(
+  backend,
+  process.env.SECURITYBENCH_MODELS
+);
+
+export const modelsToRun: RunnableModel[] =
+  lavalampModelIds?.map((modelId) => ({ name: modelId, modelId })) ??
+  defaultModels;

@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { modelsToRun } from "./constants";
 import {
   resolveMaxConcurrency,
+  resolveLavalampModelIds,
   resolveRunnerBackend,
+  resolveTestRuns,
 } from "./runner-backend";
 
 describe("SecurityBench runner backend", () => {
@@ -40,6 +42,29 @@ describe("SecurityBench runner backend", () => {
     );
     expect(() => resolveMaxConcurrency("lavalamp", "2.5")).toThrow(
       "SECURITYBENCH_MAX_CONCURRENCY must be a positive integer"
+    );
+  });
+
+  test("supports bounded smoke-run configuration", () => {
+    expect(resolveTestRuns(undefined)).toBe(30);
+    expect(resolveTestRuns("1")).toBe(1);
+    expect(
+      resolveLavalampModelIds(
+        "lavalamp",
+        "cloudflare-workers-ai/@cf/zai-org/glm-4.7-flash, openai/gpt-5-mini"
+      )
+    ).toEqual([
+      "cloudflare-workers-ai/@cf/zai-org/glm-4.7-flash",
+      "openai/gpt-5-mini",
+    ]);
+  });
+
+  test("rejects invalid smoke-run configuration", () => {
+    expect(() => resolveTestRuns("0")).toThrow(
+      "SECURITYBENCH_TEST_RUNS must be a positive integer"
+    );
+    expect(() => resolveLavalampModelIds("ai-sdk", "openai/gpt-5")).toThrow(
+      "SECURITYBENCH_MODELS is only available with the lavalamp backend"
     );
   });
 });

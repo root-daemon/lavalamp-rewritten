@@ -26,8 +26,12 @@ The default Lavalamp backend runs at concurrency `4`. Configuration:
 ```bash
 SECURITYBENCH_LAVALAMP_BIN=/path/to/bin/lavalamp bun run cli
 SECURITYBENCH_MAX_CONCURRENCY=8 bun run cli
+SECURITYBENCH_TEST_RUNS=1 bun run cli
+SECURITYBENCH_MODELS=cloudflare-workers-ai/@cf/zai-org/glm-4.7-flash bun run cli
 SECURITYBENCH_RUNNER=ai-sdk bun run cli
 ```
 
 `SECURITYBENCH_RUNNER` accepts only `lavalamp` or `ai-sdk`. Results, cache
 reuse, scoring, Markdown reports, and visualizer input keep existing formats.
+Scoring requires the complete canonical answer after trimming outer whitespace;
+extra prose, Markdown, partial matches, and multiple answers fail.

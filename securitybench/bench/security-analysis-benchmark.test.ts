@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFile } from "fs/promises";
+import { readFile, readdir } from "fs/promises";
 import { join } from "path";
 
 type Axis = "detection" | "safe-twin" | "exploit-trace" | "remediation";
@@ -55,6 +55,17 @@ function countsBy<T extends string>(values: T[]) {
 }
 
 describe("Security Analysis Benchmark datasets", () => {
+  test("contains only the full and lite security suites", async () => {
+    const files = (await readdir(join(import.meta.dir, "tests")))
+      .filter((file) => file.endsWith(".json"))
+      .sort();
+
+    expect(files).toEqual([
+      "security-analysis-lite-test.json",
+      "security-analysis-test.json",
+    ]);
+  });
+
   test("full suite has complete balanced ground truth", async () => {
     const suite = await loadSuite("security-analysis-test.json");
     const expectedIds = Object.keys(expectedFullAnswers);

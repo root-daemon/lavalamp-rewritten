@@ -148,24 +148,14 @@ function safeFilename(str: string) {
   return str.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
-function isCorrect(input: {
+export function isCorrect(input: {
   answers: string[];
   negative_answers?: string[];
   result: string;
 }) {
-  const resultLower = input.result.toLowerCase();
-
-  if (input.negative_answers) {
-    if (
-      input.negative_answers.some((answer) =>
-        resultLower.includes(answer.toLowerCase())
-      )
-    ) {
-      return false;
-    }
-  }
-  return input.answers.some((answer) =>
-    resultLower.includes(answer.toLowerCase())
+  const result = input.result.trim().toLowerCase();
+  return input.answers.some(
+    (answer) => result === answer.trim().toLowerCase()
   );
 }
 
@@ -213,6 +203,9 @@ async function runTest(input: {
       };
     }
 
+    if (model.llm === undefined) {
+      throw new Error(`AI SDK model missing for ${model.name}`);
+    }
     const testResult = await generateText({
       model: model.llm,
       system: system_prompt,

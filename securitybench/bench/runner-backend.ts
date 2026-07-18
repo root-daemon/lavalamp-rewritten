@@ -25,3 +25,36 @@ export function resolveMaxConcurrency(
   }
   return parsed;
 }
+
+export function resolveTestRuns(value: string | undefined): number {
+  if (value === undefined) {
+    return 30;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error("SECURITYBENCH_TEST_RUNS must be a positive integer");
+  }
+  return parsed;
+}
+
+export function resolveLavalampModelIds(
+  backend: RunnerBackend,
+  value: string | undefined
+): string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (backend !== "lavalamp") {
+    throw new Error(
+      "SECURITYBENCH_MODELS is only available with the lavalamp backend"
+    );
+  }
+  const modelIds = value
+    .split(",")
+    .map((modelId) => modelId.trim())
+    .filter(Boolean);
+  if (modelIds.length === 0) {
+    throw new Error("SECURITYBENCH_MODELS must contain at least one model ID");
+  }
+  return modelIds;
+}
