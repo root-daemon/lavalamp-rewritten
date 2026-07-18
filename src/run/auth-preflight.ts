@@ -2,8 +2,10 @@ import { loadCredentials } from '../auth/credentials';
 import { validateCredentials, login } from '../auth/login';
 import { resolveRuntimeRoute } from '../config/runtime-route';
 import { BUILD_MODEL } from '../config/models';
+import type { AgentBackend } from '../runtime/backend';
 
 export interface PreflightContext {
+  backend?: AgentBackend;
   outputFormat: 'text' | 'json';
   config: any;
   env: Record<string, string | undefined>;
@@ -24,6 +26,7 @@ function emitHeadlessError(message: string, outputFormat: 'text' | 'json'): void
 }
 
 export async function preflightInteractiveAuth(ctx: PreflightContext): Promise<void> {
+  if (ctx.backend === 'codex') return;
   const route = resolveRuntimeRoute({
     config: ctx.config,
     env: ctx.env,
@@ -55,6 +58,7 @@ export async function preflightSimpleAuth(
   ctx: PreflightContext,
   quiet: boolean,
 ): Promise<void> {
+  if (ctx.backend === 'codex') return;
   const route = resolveRuntimeRoute({
     config: ctx.config,
     env: ctx.env,
@@ -83,6 +87,7 @@ export async function preflightSimpleAuth(
 }
 
 export async function preflightHeadlessAuth(ctx: PreflightContext): Promise<boolean> {
+  if (ctx.backend === 'codex') return true;
   const route = resolveRuntimeRoute({
     config: ctx.config,
     env: ctx.env,

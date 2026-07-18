@@ -25,6 +25,7 @@ Here is what makes it different:
 ### Prerequisites
 * You need [Bun](https://bun.sh/) (>= 1.3.14) only when building from source.
 * A Cloudflare account (or API keys for fallback providers like Anthropic/OpenAI).
+* Optional: a user-installed [Codex CLI](https://github.com/openai/codex) `>=0.144.4` on `PATH` to use the Codex backend on macOS or Linux.
 
 ### Installation
 Install the precompiled binary for your system:
@@ -55,6 +56,15 @@ lavalamp status
 lavalamp logout
 ```
 
+To use Codex instead, authenticate through Codex and select the backend:
+
+```bash
+lavalamp login --backend codex
+lavalamp config set backend codex
+```
+
+Flue remains the default. Lavalamp reuses Codex's own configuration and authentication; it does not collect or store OpenAI API keys for this backend.
+
 ---
 
 ## How to use the CLI
@@ -71,6 +81,7 @@ lavalamp [command/flag]
 | `lavalamp ask` | Start a read-only interactive session to explore code. |
 | `lavalamp ask "your question"` | Ask a single question about the codebase and exit. |
 | `lavalamp models` | List known models, context window sizes, and capabilities. |
+| `lavalamp models --backend codex` | List the models and reasoning efforts reported by Codex. |
 | `lavalamp config show` | Print current configuration (default model, AI Gateway status). |
 | `lavalamp config set <key> <value>` | Update settings (e.g. `lavalamp config set model <model-id>`). |
 
@@ -84,6 +95,7 @@ lavalamp [command/flag]
 | `--continue [session_id]` | Resume a previous session. Run without an ID to choose from history. |
 | `--workspace <path>` | Set a custom workspace folder (defaults to current directory). |
 | `--model <model_id>` | Use a specific model for this run only. |
+| `--backend <flue\|codex>` | Select the runtime backend for this run. |
 | `--output-format <text\|json>` | Format stdout output (useful with `-p` or `--repl`). |
 | `--quiet` | Hide diagnostic status messages, only showing the agent's output. |
 
@@ -102,6 +114,7 @@ Type these commands directly into the prompt input box:
 * `/clear` - Clear conversation history and start fresh.
 * `/plan` - Toggle Plan Mode (changes input bar to a teal accent) to design tasks before building.
 * `/sessions` - Open a list of past sessions to pick one to resume.
+* `/backend` - Show or switch between Flue and Codex while idle; switching starts a clean session.
 * `/memory` - View or update the persistent project memory.
 * `/model` - List or switch the active model.
 * `/workspace` - Change the workspace directory.
@@ -130,6 +143,8 @@ When viewing large code blocks or file diffs, the TUI opens a full-screen view. 
 ---
 
 ## Architecture
+
+Lavalamp has two backend adapters. Flue uses the existing Node IPC child process. Codex uses one dedicated `codex app-server --stdio` child and its thread → turn → item JSONL lifecycle. Codex owns canonical conversation history; Lavalamp stores only its local session metadata and Codex thread mapping. Sessions never inject transcripts across backends.
 
 To prevent the terminal UI from locking up during compilation, test suites, or large codebase searches, **lavalamp** separates layout rendering from agent orchestration using a two-process model.
 
@@ -191,6 +206,8 @@ By default, **lavalamp** operates on a zero-trust permission model:
   * **`[n]` Deny**: Block execution and return an abort error to the LLM.
   * **`[a]` Always Allow**: Authorize this and all future matching commands (adds a pattern to `~/.config/lavalamp/autorun.json`).
 * If left unattended, permission requests auto-deny after 30 seconds for safety.
+
+Codex approvals use Codex's native allow-once, allow-for-session, and deny responses. Interactive Codex prompts do not time out. `--yes` remains confined to the workspace sandbox and refuses network or additional-root escalation; only `--sudo` selects unrestricted filesystem and network access.
 
 The diagram below shows how the agent evaluates, prompts, and executes tools in the local sandbox:
 

@@ -1,6 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { Message } from './state';
+import type { AgentBackend } from '../runtime/backend';
+import type { RuntimeMode } from '../runtime/types';
 import {
   sessionDirs,
   sessionPath,
@@ -10,6 +12,25 @@ import {
 
 function ensureSessionsDir() {
   fs.mkdirSync(sessionsDir(), { recursive: true });
+}
+
+export interface CodexSessionRecord {
+  version: 2;
+  id: string;
+  backend: 'codex';
+  codexThreadId: string;
+  cwd: string;
+  mode: RuntimeMode;
+  name: string;
+  savedAt: number;
+}
+
+export interface SessionSummary {
+  id: string;
+  backend: AgentBackend;
+  name: string;
+  savedAt: number;
+  messageCount: number;
 }
 
 export function nameSession(messages: Message[]): string {
@@ -62,20 +83,54 @@ export function saveSession(
   return id;
 }
 
-export function listSessions(): {
-  id: string;
-  name: string;
-  savedAt: number;
-  messageCount: number;
-}[] {
+export function saveCodexSession(record: CodexSessionRecord): string {
+  ensureSessionsDir();
+  fs.writeFileSync(sessionPath(record.id), JSON.stringify(record));
+  return record.id;
+}
+
+export function loadCodexSession(sessionId: string): CodexSessionRecord | null {
+  ensureSessionsDir();
+  for (const file of sessionPathCandidates(sessionId)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<CodexSessionRecord>;
+      if (
+        data.version === 2 &&
+        data.backend === 'codex' &&
+        typeof data.id === 'string' &&
+        typeof data.codexThreadId === 'string' &&
+        typeof data.cwd === 'string' &&
+        (data.mode === 'build' || data.mode === 'ask' || data.mode === 'plan') &&
+        typeof data.name === 'string' &&
+        typeof data.savedAt === 'number'
+      ) {
+        return data as CodexSessionRecord;
+      }
+    } catch {}
+  }
+  return null;
+}
+
+export function sessionBackend(sessionId: string): AgentBackend | undefined {
+  const codex = loadCodexSession(sessionId);
+  if (codex !== null) {
+    return 'codex';
+  }
+  for (const file of sessionPathCandidates(sessionId)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(file, 'utf8')) as { id?: unknown };
+      if (typeof data.id === 'string') {
+        return 'flue';
+      }
+    } catch {}
+  }
+  return undefined;
+}
+
+export function listSessions(): SessionSummary[] {
   ensureSessionsDir();
   const seen = new Set<string>();
-  const sessions: {
-    id: string;
-    name: string;
-    savedAt: number;
-    messageCount: number;
-  }[] = [];
+  const sessions: SessionSummary[] = [];
   for (const dir of sessionDirs()) {
     if (!fs.existsSync(dir)) {
       continue;
@@ -90,6 +145,7 @@ export function listSessions(): {
           }
           seen.add(data.id);
           sessions.push({
+            backend: data.backend === 'codex' ? 'codex' : 'flue',
             id: data.id,
             messageCount: (data.messages ?? []).length,
             name: data.name ?? f.replace('.json', ''),

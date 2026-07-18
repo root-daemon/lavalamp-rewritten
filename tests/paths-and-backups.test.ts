@@ -122,6 +122,11 @@ describe('mutation backup planning', () => {
         command: "sed -i 's/a/b/' src/run.ts",
       }),
     ).toEqual({ paths: ['src/run.ts'] });
+    expect(
+      planMutationBackup('fileChange', {
+        changes: [{ path: 'src/codex.ts' }, { filePath: 'src/runtime.ts' }],
+      }),
+    ).toEqual({ paths: ['src/codex.ts', 'src/runtime.ts'] });
   });
 });
 
@@ -265,6 +270,26 @@ describe('ChangeTracker', () => {
 });
 
 describe('BackupEngine', () => {
+  test('extends one turn backup without replacing earlier snapshots', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'lavalamp-backup-'));
+    const state = mkdtempSync(join(tmpdir(), 'lavalamp-state-'));
+    process.env.LAVALAMP_HOME = state;
+    writeFileSync(join(root, 'a.txt'), 'a before\n');
+    writeFileSync(join(root, 'b.txt'), 'b before\n');
+    const engine = new BackupEngine(root);
+    const id = engine.createBackup(['a.txt']);
+    writeFileSync(join(root, 'a.txt'), 'a after\n');
+    engine.extendBackup(id, ['a.txt', 'b.txt']);
+    writeFileSync(join(root, 'b.txt'), 'b after\n');
+
+    engine.restoreBackup(id);
+
+    expect(await Bun.file(join(root, 'a.txt')).text()).toBe('a before\n');
+    expect(await Bun.file(join(root, 'b.txt')).text()).toBe('b before\n');
+    rmSync(root, { force: true, recursive: true });
+    rmSync(state, { force: true, recursive: true });
+  });
+
   test('restores edited files and removes files created after backup', async () => {
     const root = mkdtempSync(join(tmpdir(), 'lavalamp-backup-'));
     const state = mkdtempSync(join(tmpdir(), 'lavalamp-state-'));

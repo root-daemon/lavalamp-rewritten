@@ -8,6 +8,13 @@ import { runPrint } from './run/headless-print';
 import { runRepl } from './run/headless-repl';
 import { offerUpdate, runUpdateCommand } from './run/update';
 import packageJson from '../package.json' with { type: 'json' };
+import {
+  assertBackendSupported,
+  parseBackend,
+  resolveBackend,
+  type AgentBackend,
+} from './runtime/backend';
+import { loadCodexSession, sessionBackend } from './tui/sessions';
 
 // @ts-ignore
 import serverCode from '../dist/server.mjs' with { type: 'text' };
@@ -15,9 +22,6 @@ import serverCode from '../dist/server.mjs' with { type: 'text' };
 const workspaceRoot = process.env.LAVALAMP_WORKSPACE ?? process.cwd();
 const config = resolveConfig();
 const env = process.env as Record<string, string | undefined>;
-const model =
-  env.LAVALAMP_MODEL ??
-  (config.defaultModel.length > 0 ? config.defaultModel : undefined);
 
 const subcommand = process.argv[2];
 const version = packageJson.version;
@@ -86,6 +90,7 @@ USAGE:
   lavalamp --continue            Resume a previous session
   lavalamp --workspace /path     Set workspace directory (default: cwd)
   lavalamp --model MODEL         Override default model
+  lavalamp --backend BACKEND     Select flue or codex
   lavalamp models                List known models
   lavalamp update                Download and install the latest release
   lavalamp config show           Show persisted config
@@ -100,6 +105,7 @@ OPTIONS:
   -c, --continue [SESSION_ID]    Resume a previous session
   -w, --workspace PATH           Set workspace directory
   -m, --model MODEL              Override the configured model
+      --backend BACKEND          Agent backend: flue or codex
       --output-format FORMAT     Output format: text or json
       --quiet                    Suppress diagnostic status messages
       --no-update-check          Skip the interactive startup update check
@@ -109,7 +115,8 @@ OPTIONS:
   process.exit(0);
 }
 
-const askIdx = findFlag(['-a', '--ask']);
+const askFlagIdx = findFlag(['-a', '--ask']);
+const askIdx = askFlagIdx !== -1 ? askFlagIdx : subcommand === 'ask' ? 2 : -1;
 const askMode = askIdx !== -1 || process.env.LAVALAMP_ASK === '1';
 const askPromptArg = askIdx === -1 ? undefined : process.argv[askIdx + 1];
 
@@ -131,6 +138,37 @@ const resumeSessionId =
   resumeSession && continueArg !== undefined && !continueArg.startsWith('-')
     ? continueArg
     : undefined;
+const backendFlag = findFlagValue(['--backend']);
+let explicitBackend: AgentBackend | undefined;
+try {
+  explicitBackend = backendFlag === null ? undefined : parseBackend(backendFlag);
+} catch (error) {
+  console.error(`[lavalamp] Error: ${(error as Error).message}`);
+  process.exit(1);
+}
+let backend: AgentBackend;
+try {
+  backend = resolveBackend({
+    explicit: explicitBackend,
+    configured: config.backend,
+    session: resumeSessionId === undefined ? undefined : sessionBackend(resumeSessionId),
+  });
+  assertBackendSupported(backend);
+} catch (error) {
+  console.error(`[lavalamp] Error: ${(error as Error).message}`);
+  process.exit(1);
+}
+const modelFlag = findFlagValue(['-m', '--model']);
+const allowModelFallback =
+  backend === 'codex' && modelFlag === null && env.LAVALAMP_MODEL === undefined;
+const model =
+  modelFlag ?? env.LAVALAMP_MODEL ??
+  (backend === 'codex'
+    ? config.codexModel.length > 0 ? config.codexModel : undefined
+    : config.defaultModel.length > 0 ? config.defaultModel : undefined);
+const codexResumeRecord = backend === 'codex' && resumeSessionId !== undefined
+  ? loadCodexSession(resumeSessionId)
+  : null;
 const outputFormatStr =
   findFlagValue(['--output-format', '--format']) ?? 'text';
 const quiet = process.argv.includes('--quiet');
@@ -192,6 +230,8 @@ async function main() {
     }
 
     await runPrint({
+      allowModelFallback,
+      backend,
       autoApprove,
       prompt,
       stdinContent,
@@ -203,9 +243,14 @@ async function main() {
       env,
       model,
       agentName,
+      sudo: sudoMode,
+      sessionId: resumeSessionId,
+      threadId: codexResumeRecord?.codexThreadId,
     });
   } else if (replLikeMode) {
     await runRepl({
+      allowModelFallback,
+      backend,
       quiet: quiet || simpleMode,
       outputFormat,
       workspaceRoot,
@@ -215,9 +260,13 @@ async function main() {
       model,
       agentName,
       simpleMode,
+      sudo: sudoMode,
+      sessionId: resumeSessionId,
+      threadId: codexResumeRecord?.codexThreadId,
     });
   } else {
     await preflightInteractiveAuth({
+      backend,
       config,
       env,
       model,
@@ -225,7 +274,9 @@ async function main() {
     });
 
     await startTui({
+      allowModelFallback,
       agentName,
+      backend,
       cwd: workspaceRoot,
       model,
       resumeSession,

@@ -1,15 +1,18 @@
 import * as readline from 'node:readline';
-import {
-  FlueProcess,
-  type PermissionRequestMsg,
-  type QuestionRequestMsg,
-} from '../tui/ipc';
+import type { PermissionRequestMsg, QuestionRequestMsg } from '../tui/ipc';
 import { preflightHeadlessAuth, type PreflightContext } from './auth-preflight';
 import { resolveRuntimeRoute } from '../config/runtime-route';
 import { BUILD_MODEL } from '../config/models';
 import { withTerminalProgress } from './terminal-progress';
+import type { AgentBackend } from '../runtime/backend';
+import { createRuntimeProcess } from '../runtime/process';
+import { saveCodexSession } from '../tui/sessions';
+import { isCodexLoginRequired } from '../runtime/codex/runtime';
+import type { RuntimeResult } from '../runtime/types';
 
 export interface PrintOptions {
+  backend: AgentBackend;
+  allowModelFallback?: boolean;
   autoApprove: boolean;
   prompt: string;
   stdinContent: string;
@@ -21,6 +24,9 @@ export interface PrintOptions {
   env: Record<string, string | undefined>;
   model?: string;
   agentName?: string;
+  sudo?: boolean;
+  sessionId?: string;
+  threadId?: string;
 }
 
 export async function runPrint(opts: PrintOptions): Promise<void> {
@@ -35,6 +41,7 @@ export async function runPrint(opts: PrintOptions): Promise<void> {
   }
 
   const preflightCtx: PreflightContext = {
+    backend: opts.backend,
     config: opts.config,
     env: opts.env,
     model: opts.model,
@@ -45,7 +52,16 @@ export async function runPrint(opts: PrintOptions): Promise<void> {
     process.exit(1);
   }
 
-  const flue = new FlueProcess(opts.serverPath, opts.workspaceRoot, opts.agentName ?? 'build');
+  const flue = createRuntimeProcess({
+    agentName: opts.agentName ?? 'build',
+    allowModelFallback: opts.allowModelFallback,
+    autoApprove: opts.autoApprove,
+    backend: opts.backend,
+    cwd: opts.workspaceRoot,
+    model: opts.model,
+    serverPath: opts.serverPath,
+    sudo: opts.sudo,
+  });
   const isTTY = process.stdin.isTTY ?? false;
   const permissionInput =
     isTTY && !opts.autoApprove
@@ -112,6 +128,12 @@ export async function runPrint(opts: PrintOptions): Promise<void> {
 
   try {
     await flue.start();
+    if (opts.backend === 'codex' && isCodexLoginRequired(flue.account)) {
+      throw new Error('Codex authentication required. Run `lavalamp login --backend codex`.');
+    }
+    if (opts.threadId !== undefined) {
+      await flue.resumeThread?.(opts.threadId);
+    }
   } catch (error: unknown) {
     permissionInput?.close();
     const msg = error instanceof Error ? error.message : String(error);
@@ -124,16 +146,17 @@ export async function runPrint(opts: PrintOptions): Promise<void> {
   }
 
   let exitCode = 0;
+  const sessionId = opts.sessionId ?? `session_${Date.now()}`;
   if (opts.outputFormat === 'json') {
     let fullText = '';
     let usage: Record<string, unknown> = {};
     let modelInfo: Record<string, unknown> = {};
-    const route = resolveRuntimeRoute({
+    const route = opts.backend === 'flue' ? resolveRuntimeRoute({
       config: opts.config,
       env: opts.env,
       model: opts.model,
       preferredModel: BUILD_MODEL,
-    });
+    }) : null;
 
     exitCode = await new Promise<number>((resolveExit) => {
       const callbacks = withTerminalProgress({
@@ -151,25 +174,30 @@ export async function runPrint(opts: PrintOptions): Promise<void> {
             fullText = result.text;
           }
           if (result !== undefined && result.usage !== undefined) {
-            usage = result.usage as Record<string, unknown>;
+            usage = result.usage as unknown as Record<string, unknown>;
           }
           if (result !== undefined && result.model !== undefined) {
             modelInfo = result.model as Record<string, unknown>;
           }
+          saveCodexResult(result, sessionId, opts);
           const provider =
             typeof modelInfo.provider === 'string'
               ? modelInfo.provider
-              : route.provider;
+              : route?.provider ?? 'openai';
           process.stdout.write(
             `${JSON.stringify({
-              cost: (usage as { cost?: unknown }).cost ?? {},
+              backend: opts.backend,
+              cost: opts.backend === 'codex' ? null : (usage as { cost?: unknown }).cost ?? {},
               model: modelInfo,
-              route: {
+              route: route === null ? null : {
                 gatewayId: route.usesGateway ? route.gatewayId : undefined,
                 mode: route.mode,
                 provider,
               },
+              sessionId,
               text: fullText,
+              ...(result.threadId === undefined ? {} : { threadId: result.threadId }),
+              ...(result.turnId === undefined ? {} : { turnId: result.turnId }),
               usage,
             })}\n`,
           );
@@ -177,7 +205,7 @@ export async function runPrint(opts: PrintOptions): Promise<void> {
         },
       });
       try {
-        flue.prompt(fullPrompt, callbacks);
+        flue.prompt(fullPrompt, callbacks, sessionId);
       } catch (error: unknown) {
         callbacks.onError?.(
           error instanceof Error ? error : new Error(String(error)),
@@ -211,6 +239,7 @@ export async function runPrint(opts: PrintOptions): Promise<void> {
           }
         },
         onResult: (result) => {
+          saveCodexResult(result, sessionId, opts);
           if (!streamedText && typeof result.text === 'string') {
             process.stdout.write(result.text);
           }
@@ -220,15 +249,14 @@ export async function runPrint(opts: PrintOptions): Promise<void> {
               result.model !== undefined
                 ? `${result.model.provider}/${result.model.id}`
                 : '';
-            console.error(
-              `\n  ${u.totalTokens} tok | $${u.cost.total.toFixed(4)} | ${modelStr}`,
-            );
+            const cost = u.cost === null ? '' : ` | $${u.cost.total.toFixed(4)}`;
+            console.error(`\n  ${u.totalTokens} tok${cost} | ${modelStr}`);
           }
           resolveExit(0);
         },
       });
       try {
-        flue.prompt(fullPrompt, callbacks);
+        flue.prompt(fullPrompt, callbacks, sessionId);
       } catch (error: unknown) {
         callbacks.onError?.(
           error instanceof Error ? error : new Error(String(error)),
@@ -241,4 +269,24 @@ export async function runPrint(opts: PrintOptions): Promise<void> {
   if (exitCode !== 0) {
     process.exit(exitCode);
   }
+}
+
+function saveCodexResult(
+  result: RuntimeResult,
+  sessionId: string,
+  opts: PrintOptions,
+): void {
+  if (opts.backend !== 'codex' || result.threadId === undefined) {
+    return;
+  }
+  saveCodexSession({
+    version: 2,
+    id: sessionId,
+    backend: 'codex',
+    codexThreadId: result.threadId,
+    cwd: opts.workspaceRoot,
+    mode: opts.agentName === 'explore' ? 'ask' : 'build',
+    name: opts.prompt.slice(0, 45) || 'Codex Session',
+    savedAt: Date.now(),
+  });
 }

@@ -3,6 +3,8 @@ import { loadCredentials } from '../auth/credentials';
 import { configPath, resolveConfig, updateConfig } from '../config/user-config';
 import { getModelEntry, listModels } from '../config/models';
 import { resolveRuntimeRoute, routeSummary } from '../config/runtime-route';
+import { parseBackend, resolveBackend } from '../runtime/backend';
+import { CodexProcess } from '../runtime/codex/runtime';
 
 const [command, subcommand, key, ...rest] = process.argv.slice(2);
 
@@ -17,6 +19,8 @@ function printConfig(): void {
       : 'off';
   console.log(`config: ${configPath()}`);
   console.log(`model: ${route.model}`);
+  console.log(`backend: ${config.backend}`);
+  console.log(`codex model: ${config.codexModel || '(server default)'}`);
   console.log(`gateway: ${gatewayLabel}`);
   console.log(`route: ${routeSummary(route)}`);
   console.log(`usage display: ${config.usageDisplayMode}`);
@@ -25,7 +29,7 @@ function printConfig(): void {
   );
 }
 
-function printModels(): void {
+function printFlueModels(): void {
   for (const model of listModels()) {
     const caps = [
       `${Math.round(model.contextWindow / 1000)}k ctx`,
@@ -34,6 +38,25 @@ function printModels(): void {
       model.gatewaySupport ? 'gateway' : 'direct',
     ].join(', ');
     console.log(`${model.id}\t${model.displayName}\t${caps}`);
+  }
+}
+
+async function printCodexModels(): Promise<void> {
+  const config = resolveConfig();
+  const runtime = new CodexProcess(process.cwd(), {
+    allowModelFallback: true,
+    model: config.codexModel || undefined,
+  });
+  try {
+    await runtime.start();
+    for (const model of await runtime.listModels()) {
+      const efforts = model.supportedReasoningEfforts.length > 0
+        ? `reasoning: ${model.supportedReasoningEfforts.join(',')}`
+        : 'reasoning: server default';
+      console.log(`${model.id}\t${model.displayName}${model.isDefault ? ' (default)' : ''}\t${efforts}`);
+    }
+  } finally {
+    await runtime.shutdown();
   }
 }
 
@@ -69,6 +92,17 @@ function setConfig(): void {
       }
       updateConfig({ defaultModel: value });
       console.log(`[lavalamp] model set to ${value}`);
+      break;
+    }
+    case 'backend': {
+      const backend = parseBackend(value);
+      updateConfig({ backend });
+      console.log(`[lavalamp] backend set to ${backend}`);
+      break;
+    }
+    case 'codex-model': {
+      updateConfig({ codexModel: value });
+      console.log(`[lavalamp] Codex model set to ${value}`);
       break;
     }
     case 'gateway': {
@@ -107,7 +141,7 @@ function setConfig(): void {
     }
     default: {
       console.error(
-        'Usage: lavalamp config set {model|gateway|gateway-enabled|usage-display} <value>',
+        'Usage: lavalamp config set {backend|model|codex-model|gateway|gateway-enabled|usage-display} <value>',
       );
       process.exit(1);
     }
@@ -115,7 +149,14 @@ function setConfig(): void {
 }
 
 if (command === 'models') {
-  printModels();
+  const backendArgIndex = process.argv.indexOf('--backend');
+  const explicit = backendArgIndex === -1 ? undefined : parseBackend(process.argv[backendArgIndex + 1]);
+  const backend = resolveBackend({ explicit, configured: resolveConfig().backend });
+  if (backend === 'codex') {
+    await printCodexModels();
+  } else {
+    printFlueModels();
+  }
 } else if (command === 'config' && subcommand === 'show') {
   printConfig();
 } else if (command === 'config' && subcommand === 'set') {

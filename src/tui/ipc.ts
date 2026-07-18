@@ -58,6 +58,8 @@ export interface PermissionRequestMsg {
   requestId: string;
   toolName: string;
   args: Record<string, unknown>;
+  allowSession?: boolean;
+  noTimeout?: boolean;
 }
 
 export interface QuestionRequestMsg {
@@ -83,6 +85,7 @@ export interface PromptImage {
   type: 'image';
   data: string;
   mimeType: string;
+  path?: string;
 }
 
 export class FlueProcess {
