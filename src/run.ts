@@ -7,12 +7,21 @@ import { preflightInteractiveAuth } from './run/auth-preflight';
 import { runPrint } from './run/headless-print';
 import { runRepl } from './run/headless-repl';
 import { offerUpdate, runUpdateCommand } from './run/update';
+import { runAnalyticsCommand } from './analytics/cli';
 import packageJson from '../package.json' with { type: 'json' };
 
 // @ts-ignore
 import serverCode from '../dist/server.mjs' with { type: 'text' };
 
-const workspaceRoot = process.env.LAVALAMP_WORKSPACE ?? process.cwd();
+const workspaceFlagIndex = process.argv.findIndex(
+  (arg) => arg === '--workspace' || arg === '-w',
+);
+const workspaceRoot =
+  process.env.LAVALAMP_WORKSPACE ??
+  (workspaceFlagIndex === -1
+    ? undefined
+    : process.argv[workspaceFlagIndex + 1]) ??
+  process.cwd();
 const config = resolveConfig();
 const env = process.env as Record<string, string | undefined>;
 const model =
@@ -23,6 +32,9 @@ const subcommand = process.argv[2];
 const version = packageJson.version;
 if (subcommand === 'update') {
   process.exit(await runUpdateCommand(version));
+}
+if (subcommand === 'analytics') {
+  process.exit(runAnalyticsCommand(process.argv.slice(3), workspaceRoot));
 }
 if (
   subcommand === 'login' ||
@@ -103,6 +115,7 @@ USAGE:
   lavalamp update                Download and install the latest release
   lavalamp config show           Show persisted config
   lavalamp config set KEY VALUE  Persist model/Gateway config
+  lavalamp analytics             Show local developer analytics
 
 OPTIONS:
   -p, --print PROMPT             Run a single prompt and exit

@@ -9,6 +9,8 @@ export const HELP_COMMANDS: [string, string][] = [
   ['/benchmarks', 'Browse benchmark catalog and runs'],
   ['/gateway', 'Show/change AI Gateway'],
   ['/usage', 'Show neuron meter'],
+  ['/analytics', 'Show developer analytics'],
+  ['/rate', 'Rate this run helpful/unhelpful'],
   ['/workspace', 'Show workspace'],
   ['/skills', 'List skills'],
   ['/mcp', 'List MCP servers'],
