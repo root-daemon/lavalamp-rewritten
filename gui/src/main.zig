@@ -53,6 +53,9 @@ const max_subagents = 8;
 const max_repo_worktrees = 8;
 const max_repo_checks = 8;
 
+var host_binary_storage: [std.fs.max_path_bytes]u8 = undefined;
+var host_binary_len: usize = 0;
+
 const Role = enum { user, assistant };
 
 pub const Message = struct {
@@ -661,7 +664,26 @@ fn hostBinary() []const u8 {
         if (std.c.access(candidate, std.c.X_OK) == 0) return candidate;
     }
 
+    if (host_binary_len > 0) return host_binary_storage[0..host_binary_len];
+
     return "lavalamp";
+}
+
+fn cacheExecutableHostBinary(io: std.Io) void {
+    var exe_dir_storage: [std.fs.max_path_bytes]u8 = undefined;
+    const exe_dir_len = std.process.executableDirPath(io, &exe_dir_storage) catch return;
+    const exe_dir = exe_dir_storage[0..exe_dir_len];
+    const exe_relative_candidates = [_][]const u8{
+        "../../../bin/lavalamp",
+        "../../../../../bin/lavalamp",
+    };
+    for (exe_relative_candidates) |relative| {
+        const candidate = std.fmt.bufPrintZ(&host_binary_storage, "{s}/{s}", .{ exe_dir, relative }) catch continue;
+        if (std.c.access(candidate.ptr, std.c.X_OK) == 0) {
+            host_binary_len = candidate.len;
+            return;
+        }
+    }
 }
 
 fn initEffects(_: *Model, fx: *Effects) void {
@@ -681,6 +703,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .send => sendPrompt(model, fx),
         .cancel => cancelTurn(model, fx),
         .new_chat => {
+            if (model.connected) sendCommand(model, fx, "/clear", false);
             model.message_count = 0;
             model.tool_count = 0;
             model.subagent_count = 0;
@@ -1464,6 +1487,7 @@ fn setError(model: *Model, message: []const u8) void {
 }
 
 pub fn main(init: std.process.Init) !void {
+    cacheExecutableHostBinary(init.io);
     const app_state = try LavalampApp.create(std.heap.page_allocator, .{
         .name = "lavalamp",
         .scene = shell_scene,
@@ -1495,6 +1519,7 @@ test {
 }
 
 test "host binary resolves repo local launcher when available" {
+    cacheExecutableHostBinary(std.testing.io);
     const binary = hostBinary();
     try std.testing.expect(!std.mem.eql(u8, binary, "lavalamp"));
     try std.testing.expect(std.mem.endsWith(u8, binary, "bin/lavalamp"));

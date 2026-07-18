@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { GuiEventStore } from '../src/gui-host/event-store';
 import {
   GuiRuntime,
@@ -11,6 +14,7 @@ import type {
 } from '../src/tui/ipc';
 import type { RuntimeCallbacks } from '../src/runtime/types';
 import type { SubAgent } from '../src/tui/state';
+import { listSessions, loadSession } from '../src/tui/sessions';
 
 class FakeProcess implements GuiProcess {
   account?: unknown;
@@ -367,6 +371,54 @@ describe('GUI runtime adapter', () => {
       routeLabel: 'Codex app-server',
       routeMode: 'codex',
     });
+  });
+
+  test('autosaves completed GUI turns into the shared session store', async () => {
+    const originalHome = globalThis.process.env.LAVALAMP_HOME;
+    const home = mkdtempSync(join(tmpdir(), 'lavalamp-gui-session-'));
+    globalThis.process.env.LAVALAMP_HOME = home;
+    try {
+      const process = new FakeProcess();
+      const runtime = new GuiRuntime({
+        process,
+        store: new GuiEventStore(),
+      });
+      await runtime.start({ workspace: '/repo' });
+
+      runtime.submitPrompt('persist this GUI task');
+      process.callbacks?.onEvent?.({ delta: 'saved answer', type: 'text_delta' });
+      process.callbacks?.onResult?.({
+        backend: 'flue',
+        model: { id: 'model-a', provider: 'cloudflare' },
+        text: 'saved answer',
+        usage: {
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: { input: 0, output: 0, total: 0 },
+          input: 0,
+          output: 0,
+          totalTokens: 0,
+        },
+      });
+
+      const session = listSessions()[0];
+      expect(session).toMatchObject({
+        backend: 'flue',
+        messageCount: 2,
+        name: 'Persist this GUI task',
+      });
+      expect(loadSession(session!.id)).toMatchObject([
+        { content: 'persist this GUI task', role: 'user' },
+        { content: 'saved answer', role: 'assistant' },
+      ]);
+    } finally {
+      if (originalHome === undefined) {
+        delete globalThis.process.env.LAVALAMP_HOME;
+      } else {
+        globalThis.process.env.LAVALAMP_HOME = originalHome;
+      }
+      rmSync(home, { force: true, recursive: true });
+    }
   });
 
   test('records runtime errors and shuts process down', async () => {

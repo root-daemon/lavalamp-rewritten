@@ -8,6 +8,7 @@ import type {
 import { attachmentsForPrompt, type AttachedImage } from '../tui/attachments';
 import type { TuiLoginProgress } from '../tui/login';
 import { loginFromTui } from '../tui/login';
+import { nameSession, saveCodexSession, saveSession } from '../tui/sessions';
 import type { AgentBackend } from '../runtime/backend';
 import { loadCredentials } from '../auth/credentials';
 import { BUILD_MODEL } from '../config/models';
@@ -18,7 +19,7 @@ import { isCodexLoginRequired } from '../runtime/codex/runtime';
 import type { RuntimeCallbacks, RuntimeMode, RuntimeModel } from '../runtime/types';
 import { AnalyticsRecorder, type RunRating } from '../analytics';
 import { SubAgentManager } from '../tui/subs';
-import type { SubAgent } from '../tui/state';
+import type { Message, SubAgent } from '../tui/state';
 import { BackupEngine } from '../storage/backups';
 import { planMutationBackup } from '../storage/mutation-backups';
 import type {
@@ -31,6 +32,7 @@ import { GuiEventStore } from './event-store';
 export interface GuiProcess {
   readonly backend?: AgentBackend;
   readonly account?: unknown;
+  readonly codexThreadId?: string;
   readonly isProcessing: boolean;
   onPermissionRequest?: OnPermissionRequest;
   onQuestionRequest?: OnQuestionRequest;
@@ -439,6 +441,9 @@ export class GuiRuntime {
             totalTokens: result.usage.totalTokens,
           },
         });
+        try {
+          this.saveSessionSnapshot();
+        } catch {}
         this.drainPromptQueue();
       },
       onStarted: () => {
@@ -785,6 +790,34 @@ export class GuiRuntime {
         restoreError: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  private saveSessionSnapshot(): void {
+    const workspace = this.workspace;
+    if (workspace === undefined) return;
+    const messages = this.store.snapshot().messages.map((message, index): Message => ({
+      content: message.content,
+      id: String(index + 1),
+      role: message.role,
+      timestamp: Date.now(),
+    }));
+    if (messages.length === 0) return;
+    const name = nameSession(messages);
+    if (this.backend === 'codex') {
+      if (this.process.codexThreadId === undefined) return;
+      this.sessionId = saveCodexSession({
+        backend: 'codex',
+        codexThreadId: this.process.codexThreadId,
+        cwd: workspace,
+        id: this.sessionId ?? `session_${Date.now()}`,
+        mode: this.mode,
+        name,
+        savedAt: Date.now(),
+        version: 2,
+      });
+      return;
+    }
+    this.sessionId = saveSession(messages, name, this.sessionId);
   }
 
   private createProcess(

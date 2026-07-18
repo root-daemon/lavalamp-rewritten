@@ -165,6 +165,31 @@ test "selecting a worktree sends a switch command through native host" {
     try testing.expectEqualStrings("/worktree switch task/gui-lane", request.body);
 }
 
+test "new chat resets view and clears the backend session" {
+    var model = main.initialModel();
+    model.connected = true;
+    model.host_port = 34197;
+    model.setAuthToken("token-123");
+    try testing.expect(main.applySnapshotJson(&model,
+        \\{"ok":true,"data":{"snapshot":{"messages":[{"role":"user","content":"Old task"},{"role":"assistant","content":"Old answer"}],"tools":[{"id":"tool-1","name":"bash","summary":"bun test","status":"completed","isError":false}],"subagents":[{"id":"sub-1","query":"Audit","status":"running","durationMs":1000}],"pendingQuestion":{"requestId":"question-1","questions":[{"id":"choice","question":"Choose"}]}}}}
+    ));
+
+    var fx = main.Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+
+    main.update(&model, .new_chat, &fx);
+
+    try testing.expectEqual(@as(usize, 0), model.message_count);
+    try testing.expectEqual(@as(usize, 0), model.tool_count);
+    try testing.expectEqual(@as(usize, 0), model.subagent_count);
+    try testing.expect(!model.pending_question);
+    try testing.expectEqual(@as(usize, 1), fx.pendingFetchCount());
+    const request = fx.pendingFetchAt(0).?;
+    try testing.expect(std.mem.endsWith(u8, request.url, "/v1/native/commands"));
+    try testing.expectEqualStrings("/clear", request.body);
+}
+
 test "composer edit and submit dispatch through native markup" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
