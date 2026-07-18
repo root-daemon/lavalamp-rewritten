@@ -13,6 +13,7 @@ export type GuiPermissionDecision = 'allow' | 'always_allow' | 'deny';
 
 export type GuiEventInput =
   | { type: 'host.ready'; workspace: string; model?: string }
+  | { type: 'user.message'; content: string }
   | { type: 'turn.started' }
   | { type: 'text.delta'; delta: string }
   | { type: 'thinking.delta'; delta: string }
@@ -77,6 +78,22 @@ export interface GuiSnapshot {
   pendingPermission?: PendingPermission;
   pendingQuestion?: PendingQuestion;
   usage: GuiUsage;
+  messages: GuiMessageSnapshot[];
+  tools: GuiToolSnapshot[];
+}
+
+export interface GuiMessageSnapshot {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface GuiToolSnapshot {
+  id: string;
+  name: string;
+  summary: string;
+  status: 'running' | 'completed' | 'failed';
+  isError: boolean;
+  durationMs?: number;
 }
 
 export interface GuiApiError {

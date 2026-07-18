@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { EMPTY_USAGE } from '../src/gui-host/contracts';
 import { GuiEventStore } from '../src/gui-host/event-store';
 
 describe('GUI event store', () => {
@@ -54,5 +55,45 @@ describe('GUI event store', () => {
       type: 'permission.resolved',
     });
     expect(store.snapshot().pendingPermission).toBeUndefined();
+  });
+
+  test('retains conversation messages and tool lifecycle for native rendering', () => {
+    const store = new GuiEventStore({ maxEvents: 20 });
+    store.append({ content: 'Fix tests', type: 'user.message' });
+    store.append({ type: 'turn.started' });
+    store.append({ delta: 'Done', type: 'text.delta' });
+    store.append({
+      args: { cmd: 'bun test' },
+      toolCallId: 'tool-1',
+      toolName: 'bash',
+      type: 'tool.started',
+    });
+    store.append({
+      durationMs: 20,
+      isError: false,
+      result: '3 pass',
+      toolCallId: 'tool-1',
+      type: 'tool.completed',
+    });
+    store.append({
+      type: 'turn.completed',
+      usage: { ...EMPTY_USAGE },
+    });
+
+    expect(store.snapshot()).toMatchObject({
+      messages: [
+        { content: 'Fix tests', role: 'user' },
+        { content: 'Done', role: 'assistant' },
+      ],
+      tools: [
+        {
+          durationMs: 20,
+          isError: false,
+          name: 'bash',
+          status: 'completed',
+          summary: 'bun test',
+        },
+      ],
+    });
   });
 });

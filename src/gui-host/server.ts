@@ -101,6 +101,31 @@ export function createGuiHostServer(
       }
 
       try {
+        if (url.pathname === '/v1/native/snapshot' && request.method === 'GET') {
+          return success({
+            models: options.listModels?.() ?? [],
+            sessions: options.listSessions?.() ?? [],
+            snapshot: options.runtime.store.snapshot(),
+          });
+        }
+
+        if (url.pathname === '/v1/native/prompts' && request.method === 'POST') {
+          const declaredLength = Number(request.headers.get('content-length') ?? '0');
+          if (declaredLength > MAX_BODY_BYTES) {
+            return failure('body_too_large', 'Request body exceeds 1 MiB', 413);
+          }
+          const prompt = await request.text();
+          if (new TextEncoder().encode(prompt).byteLength > MAX_BODY_BYTES) {
+            return failure('body_too_large', 'Request body exceeds 1 MiB', 413);
+          }
+          if (prompt.trim().length === 0) {
+            return failure('invalid_prompt', 'prompt must be non-empty', 400);
+          }
+          const sessionId = request.headers.get('x-lavalamp-session') ?? undefined;
+          const requestId = options.runtime.submitPrompt(prompt, sessionId);
+          return success({ requestId }, 202);
+        }
+
         if (url.pathname === '/v1/events' && request.method === 'GET') {
           const rawCursor = url.searchParams.get('after') ?? '0';
           const cursor = Number(rawCursor);

@@ -147,4 +147,31 @@ describe('GUI host server', () => {
       data: [{ id: 'model-a' }],
     });
   });
+
+  test('offers compact native snapshot and raw prompt endpoints', async () => {
+    const { request, runtime } = fixture();
+    const prompt = await request('/v1/native/prompts', {
+      body: 'Fix "quoted" tests\nwithout JSON escaping',
+      headers: {
+        authorization: 'Bearer secret-token',
+        'content-type': 'text/plain',
+        'x-lavalamp-session': 'session-a',
+      },
+      method: 'POST',
+    });
+    expect(prompt.status).toBe(202);
+    expect(runtime.prompts).toEqual([
+      ['Fix "quoted" tests\nwithout JSON escaping', 'session-a'],
+    ]);
+
+    const snapshot = await request('/v1/native/snapshot');
+    expect(await snapshot.json()).toMatchObject({
+      ok: true,
+      data: {
+        models: [{ id: 'model-a' }],
+        sessions: [{ sessionId: 'session-a' }],
+        snapshot: { processing: true },
+      },
+    });
+  });
 });

@@ -1,0 +1,529 @@
+const std = @import("std");
+const runner = @import("runner");
+const native_sdk = @import("native_sdk");
+
+pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
+
+const canvas = native_sdk.canvas;
+const geometry = native_sdk.geometry;
+const canvas_label = "main-canvas";
+const window_width: f32 = 1280;
+const window_height: f32 = 820;
+
+const app_permissions = [_][]const u8{ native_sdk.security.permission_command, native_sdk.security.permission_view };
+const shell_views = [_]native_sdk.ShellView{.{
+    .label = canvas_label,
+    .kind = .gpu_surface,
+    .fill = true,
+    .role = "Lavalamp workspace",
+    .accessibility_label = "Lavalamp",
+    .gpu_backend = .metal,
+    .gpu_pixel_format = .bgra8_unorm,
+    .gpu_present_mode = .timer,
+    .gpu_alpha_mode = .@"opaque",
+    .gpu_color_space = .srgb,
+    .gpu_vsync = true,
+}};
+const shell_windows = [_]native_sdk.ShellWindow{.{
+    .label = "main",
+    .title = "Lavalamp",
+    .width = window_width,
+    .height = window_height,
+    .min_width = 920,
+    .min_height = 640,
+    .restore_state = true,
+    .views = &shell_views,
+}};
+const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
+
+pub const host_process_key: u64 = 100;
+pub const poll_timer_key: u64 = 101;
+const poll_fetch_key: u64 = 102;
+const action_fetch_key: u64 = 103;
+const max_messages = 40;
+const max_tools = 24;
+const max_sessions = 16;
+
+const Role = enum { user, assistant };
+
+pub const Message = struct {
+    id: u64 = 0,
+    role: Role = .assistant,
+    storage: [4096]u8 = undefined,
+    len: usize = 0,
+
+    pub fn content(self: *const Message) []const u8 {
+        return self.storage[0..self.len];
+    }
+
+    pub fn isUser(self: *const Message) bool {
+        return self.role == .user;
+    }
+
+    fn set(self: *Message, id: u64, role: Role, text: []const u8) void {
+        self.id = id;
+        self.role = role;
+        self.len = copyText(&self.storage, text);
+    }
+};
+
+pub const Tool = struct {
+    id: u64 = 0,
+    name_storage: [96]u8 = undefined,
+    name_len: usize = 0,
+    summary_storage: [320]u8 = undefined,
+    summary_len: usize = 0,
+    status_storage: [24]u8 = undefined,
+    status_len: usize = 0,
+    failed: bool = false,
+    duration_ms: u64 = 0,
+
+    pub fn name(self: *const Tool) []const u8 {
+        return self.name_storage[0..self.name_len];
+    }
+    pub fn summary(self: *const Tool) []const u8 {
+        return self.summary_storage[0..self.summary_len];
+    }
+    pub fn status(self: *const Tool) []const u8 {
+        return self.status_storage[0..self.status_len];
+    }
+};
+
+pub const Session = struct {
+    key: u64 = 0,
+    id_storage: [128]u8 = undefined,
+    id_len: usize = 0,
+    prompt_storage: [320]u8 = undefined,
+    prompt_len: usize = 0,
+
+    pub fn id(self: *const Session) []const u8 {
+        return self.id_storage[0..self.id_len];
+    }
+    pub fn prompt(self: *const Session) []const u8 {
+        return self.prompt_storage[0..self.prompt_len];
+    }
+};
+
+pub const Model = struct {
+    pub const view_unbound = .{
+        "connected", "cursor", "host_port", "auth_token_storage", "auth_token_len",
+        "draft", "assistant_storage", "assistant_len", "thinking_storage", "thinking_len",
+        "terminal_storage", "terminal_len", "error_storage", "error_len",
+        "workspace_storage", "workspace_len", "model_storage", "model_len",
+        "provider_storage", "provider_len", "permission_id_storage", "permission_id_len",
+        "permission_tool_storage", "permission_tool_len", "messages", "message_count",
+        "tools", "tool_count", "sessions", "session_count", "assistantText", "authToken",
+        "permissionId", "hasMessages",
+    };
+
+    connected: bool = false,
+    processing: bool = false,
+    cursor: u64 = 0,
+    host_port: u16 = 0,
+    auth_token_storage: [128]u8 = undefined,
+    auth_token_len: usize = 0,
+    draft: canvas.TextBuffer(8192) = .{},
+    assistant_storage: [65536]u8 = undefined,
+    assistant_len: usize = 0,
+    thinking_storage: [16384]u8 = undefined,
+    thinking_len: usize = 0,
+    terminal_storage: [16384]u8 = undefined,
+    terminal_len: usize = 0,
+    error_storage: [1024]u8 = undefined,
+    error_len: usize = 0,
+    workspace_storage: [1024]u8 = undefined,
+    workspace_len: usize = 0,
+    model_storage: [256]u8 = undefined,
+    model_len: usize = 0,
+    provider_storage: [96]u8 = undefined,
+    provider_len: usize = 0,
+    permission_pending: bool = false,
+    permission_id_storage: [128]u8 = undefined,
+    permission_id_len: usize = 0,
+    permission_tool_storage: [96]u8 = undefined,
+    permission_tool_len: usize = 0,
+    messages: [max_messages]Message = [_]Message{.{}} ** max_messages,
+    message_count: usize = 0,
+    tools: [max_tools]Tool = [_]Tool{.{}} ** max_tools,
+    tool_count: usize = 0,
+    sessions: [max_sessions]Session = [_]Session{.{}} ** max_sessions,
+    session_count: usize = 0,
+    total_tokens: u64 = 0,
+    total_cost: f64 = 0,
+
+    pub fn assistantText(self: *const Model) []const u8 {
+        return self.assistant_storage[0..self.assistant_len];
+    }
+    pub fn draftText(self: *const Model) []const u8 {
+        return self.draft.text();
+    }
+    pub fn thinkingText(self: *const Model) []const u8 {
+        return self.thinking_storage[0..self.thinking_len];
+    }
+    pub fn terminalText(self: *const Model) []const u8 {
+        return self.terminal_storage[0..self.terminal_len];
+    }
+    pub fn errorText(self: *const Model) []const u8 {
+        return self.error_storage[0..self.error_len];
+    }
+    pub fn workspaceLabel(self: *const Model) []const u8 {
+        if (self.workspace_len == 0) return "Workspace unavailable";
+        return self.workspace_storage[0..self.workspace_len];
+    }
+    pub fn modelLabel(self: *const Model) []const u8 {
+        if (self.model_len == 0) return "Default model";
+        return self.model_storage[0..self.model_len];
+    }
+    pub fn providerLabel(self: *const Model) []const u8 {
+        if (self.provider_len == 0) return "Connecting";
+        return self.provider_storage[0..self.provider_len];
+    }
+    pub fn authToken(self: *const Model) []const u8 {
+        return self.auth_token_storage[0..self.auth_token_len];
+    }
+    pub fn permissionId(self: *const Model) []const u8 {
+        return self.permission_id_storage[0..self.permission_id_len];
+    }
+    pub fn permissionTool(self: *const Model) []const u8 {
+        return self.permission_tool_storage[0..self.permission_tool_len];
+    }
+    pub fn messageItems(self: *const Model) []const Message {
+        return self.messages[0..self.message_count];
+    }
+    pub fn toolItems(self: *const Model) []const Tool {
+        return self.tools[0..self.tool_count];
+    }
+    pub fn sessionItems(self: *const Model) []const Session {
+        return self.sessions[0..self.session_count];
+    }
+    pub fn hasMessages(self: *const Model) bool {
+        return self.message_count > 0;
+    }
+    pub fn emptyState(self: *const Model) bool {
+        return self.message_count == 0;
+    }
+    pub fn hasError(self: *const Model) bool {
+        return self.error_len > 0;
+    }
+    pub fn hasThinking(self: *const Model) bool {
+        return self.thinking_len > 0;
+    }
+    pub fn hasTerminal(self: *const Model) bool {
+        return self.terminal_len > 0;
+    }
+    pub fn sendDisabled(self: *const Model) bool {
+        return !self.connected or self.processing or self.draft.isEmpty();
+    }
+    pub fn connectionLabel(self: *const Model) []const u8 {
+        if (!self.connected) return "Connecting";
+        if (self.processing) return "Running";
+        return "Ready";
+    }
+    pub fn setAuthToken(self: *Model, text: []const u8) void {
+        self.auth_token_len = copyText(&self.auth_token_storage, text);
+    }
+};
+
+pub const Msg = union(enum) {
+    draft_edit: canvas.TextInputEvent,
+    send,
+    new_chat,
+    allow_permission,
+    always_allow_permission,
+    deny_permission,
+    host_line: native_sdk.EffectLine,
+    host_exit: native_sdk.EffectExit,
+    poll_tick: native_sdk.EffectTimer,
+    snapshot_response: native_sdk.EffectResponse,
+    action_response: native_sdk.EffectResponse,
+
+    pub const view_unbound = .{ "host_line", "host_exit", "poll_tick", "snapshot_response", "action_response" };
+};
+
+pub const Effects = native_sdk.Effects(Msg);
+pub const AppUi = canvas.Ui(Msg);
+pub const AppMarkup = canvas.MarkupView(Model, Msg);
+pub const app_markup = @embedFile("app.native");
+const LavalampApp = native_sdk.UiApp(Model, Msg);
+
+pub fn initialModel() Model {
+    return .{};
+}
+
+fn initEffects(_: *Model, fx: *Effects) void {
+    fx.spawn(.{
+        .key = host_process_key,
+        .argv = &.{ "lavalamp", "gui-host" },
+        .max_line_bytes = 16 * 1024,
+        .on_line = Effects.lineMsg(.host_line),
+        .on_exit = Effects.exitMsg(.host_exit),
+    });
+}
+
+pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
+    switch (msg) {
+        .draft_edit => |edit| model.draft.apply(edit),
+        .send => sendPrompt(model, fx),
+        .new_chat => {
+            model.message_count = 0;
+            model.tool_count = 0;
+            model.assistant_len = 0;
+            model.thinking_len = 0;
+            model.terminal_len = 0;
+            model.error_len = 0;
+        },
+        .allow_permission => resolvePermission(model, fx, "allow"),
+        .always_allow_permission => resolvePermission(model, fx, "always_allow"),
+        .deny_permission => resolvePermission(model, fx, "deny"),
+        .host_line => |line| handleHostLine(model, line, fx),
+        .host_exit => |exit| {
+            model.connected = false;
+            if (exit.code != 0) setError(model, "Lavalamp host exited unexpectedly");
+        },
+        .poll_tick => |timer| {
+            if (timer.outcome == .fired and model.connected) fetchSnapshot(model, fx);
+        },
+        .snapshot_response => |response| {
+            if (response.outcome != .ok or response.status < 200 or response.status >= 300) {
+                setError(model, "Could not read Lavalamp state");
+                return;
+            }
+            if (!applySnapshotJson(model, response.body)) setError(model, "Invalid Lavalamp state response");
+        },
+        .action_response => |response| {
+            if (response.outcome != .ok or response.status < 200 or response.status >= 300) {
+                model.processing = false;
+                setError(model, "Lavalamp action failed");
+            }
+        },
+    }
+}
+
+fn handleHostLine(model: *Model, line: native_sdk.EffectLine, fx: *Effects) void {
+    const prefix = "LAVALAMP_GUI_READY ";
+    if (!std.mem.startsWith(u8, line.line, prefix)) return;
+    var parts = std.mem.tokenizeScalar(u8, line.line[prefix.len..], ' ');
+    const port_text = parts.next() orelse return;
+    const token = parts.next() orelse return;
+    const port = std.fmt.parseInt(u16, port_text, 10) catch return;
+    model.host_port = port;
+    model.setAuthToken(token);
+    model.connected = true;
+    model.error_len = 0;
+    fx.startTimer(.{
+        .key = poll_timer_key,
+        .interval_ms = 350,
+        .mode = .repeating,
+        .on_fire = Effects.timerMsg(.poll_tick),
+    });
+    fetchSnapshot(model, fx);
+}
+
+fn authHeader(model: *const Model, buffer: []u8) []const u8 {
+    return std.fmt.bufPrint(buffer, "Bearer {s}", .{model.authToken()}) catch "";
+}
+
+fn endpoint(model: *const Model, buffer: []u8, path: []const u8) []const u8 {
+    return std.fmt.bufPrint(buffer, "http://127.0.0.1:{d}{s}", .{ model.host_port, path }) catch "";
+}
+
+fn fetchSnapshot(model: *const Model, fx: *Effects) void {
+    var url_buffer: [160]u8 = undefined;
+    var auth_buffer: [192]u8 = undefined;
+    const headers = [_]std.http.Header{.{ .name = "authorization", .value = authHeader(model, &auth_buffer) }};
+    fx.fetch(.{
+        .key = poll_fetch_key,
+        .url = endpoint(model, &url_buffer, "/v1/native/snapshot"),
+        .headers = &headers,
+        .timeout_ms = 4_000,
+        .on_response = Effects.responseMsg(.snapshot_response),
+    });
+}
+
+fn sendPrompt(model: *Model, fx: *Effects) void {
+    if (model.sendDisabled()) return;
+    var url_buffer: [160]u8 = undefined;
+    var auth_buffer: [192]u8 = undefined;
+    const headers = [_]std.http.Header{
+        .{ .name = "authorization", .value = authHeader(model, &auth_buffer) },
+        .{ .name = "content-type", .value = "text/plain; charset=utf-8" },
+    };
+    fx.fetch(.{
+        .key = action_fetch_key,
+        .method = .POST,
+        .url = endpoint(model, &url_buffer, "/v1/native/prompts"),
+        .headers = &headers,
+        .body = model.draft.text(),
+        .timeout_ms = 10_000,
+        .on_response = Effects.responseMsg(.action_response),
+    });
+    model.processing = true;
+    model.draft.clear();
+    model.error_len = 0;
+}
+
+fn resolvePermission(model: *Model, fx: *Effects, decision: []const u8) void {
+    if (!model.permission_pending) return;
+    var path_buffer: [256]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buffer, "/v1/permissions/{s}", .{model.permissionId()}) catch return;
+    var url_buffer: [320]u8 = undefined;
+    var auth_buffer: [192]u8 = undefined;
+    var body_buffer: [96]u8 = undefined;
+    const body = std.fmt.bufPrint(&body_buffer, "{{\"decision\":\"{s}\"}}", .{decision}) catch return;
+    const headers = [_]std.http.Header{
+        .{ .name = "authorization", .value = authHeader(model, &auth_buffer) },
+        .{ .name = "content-type", .value = "application/json" },
+    };
+    fx.fetch(.{
+        .key = action_fetch_key,
+        .method = .POST,
+        .url = endpoint(model, &url_buffer, path),
+        .headers = &headers,
+        .body = body,
+        .on_response = Effects.responseMsg(.action_response),
+    });
+    model.permission_pending = false;
+}
+
+const UsagePayload = struct {
+    input: u64 = 0,
+    output: u64 = 0,
+    cacheRead: u64 = 0,
+    cacheWrite: u64 = 0,
+    totalTokens: u64 = 0,
+    cost: f64 = 0,
+};
+const MessagePayload = struct { role: []const u8 = "assistant", content: []const u8 = "" };
+const ToolPayload = struct {
+    id: []const u8 = "",
+    name: []const u8 = "",
+    summary: []const u8 = "",
+    status: []const u8 = "",
+    isError: bool = false,
+    durationMs: ?u64 = null,
+};
+const PendingPermissionPayload = struct { requestId: []const u8 = "", toolName: []const u8 = "" };
+const SnapshotPayload = struct {
+    cursor: u64 = 0,
+    processing: bool = false,
+    assistantText: []const u8 = "",
+    thinkingText: []const u8 = "",
+    terminalOutput: []const u8 = "",
+    workspace: ?[]const u8 = null,
+    model: ?[]const u8 = null,
+    provider: ?[]const u8 = null,
+    @"error": ?[]const u8 = null,
+    pendingPermission: ?PendingPermissionPayload = null,
+    usage: UsagePayload = .{},
+    messages: []const MessagePayload = &.{},
+    tools: []const ToolPayload = &.{},
+};
+const SessionPayload = struct { sessionId: []const u8 = "", prompt: []const u8 = "" };
+const ModelPayload = struct { id: []const u8 = "", displayName: []const u8 = "" };
+const NativeData = struct {
+    snapshot: SnapshotPayload = .{},
+    sessions: []const SessionPayload = &.{},
+    models: []const ModelPayload = &.{},
+};
+const NativeEnvelope = struct { ok: bool = false, data: ?NativeData = null };
+
+pub fn applySnapshotJson(model: *Model, body: []const u8) bool {
+    var parse_storage: [256 * 1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&parse_storage);
+    const envelope = std.json.parseFromSliceLeaky(
+        NativeEnvelope,
+        fba.allocator(),
+        body,
+        .{ .ignore_unknown_fields = true },
+    ) catch return false;
+    if (!envelope.ok) return false;
+    const data = envelope.data orelse return false;
+    const snapshot = data.snapshot;
+    model.cursor = snapshot.cursor;
+    model.processing = snapshot.processing;
+    model.assistant_len = copyText(&model.assistant_storage, snapshot.assistantText);
+    model.thinking_len = copyText(&model.thinking_storage, snapshot.thinkingText);
+    model.terminal_len = copyText(&model.terminal_storage, snapshot.terminalOutput);
+    model.workspace_len = copyText(&model.workspace_storage, snapshot.workspace orelse "");
+    model.model_len = copyText(&model.model_storage, snapshot.model orelse "");
+    model.provider_len = copyText(&model.provider_storage, snapshot.provider orelse "");
+    model.error_len = copyText(&model.error_storage, snapshot.@"error" orelse "");
+    model.total_tokens = snapshot.usage.totalTokens;
+    model.total_cost = snapshot.usage.cost;
+
+    model.message_count = @min(snapshot.messages.len, max_messages);
+    for (snapshot.messages[0..model.message_count], 0..) |message, index| {
+        model.messages[index].set(index + 1, if (std.mem.eql(u8, message.role, "user")) .user else .assistant, message.content);
+    }
+
+    model.tool_count = @min(snapshot.tools.len, max_tools);
+    for (snapshot.tools[0..model.tool_count], 0..) |tool, index| {
+        const target = &model.tools[index];
+        target.id = std.hash.Wyhash.hash(0, tool.id);
+        target.name_len = copyText(&target.name_storage, tool.name);
+        target.summary_len = copyText(&target.summary_storage, tool.summary);
+        target.status_len = copyText(&target.status_storage, tool.status);
+        target.failed = tool.isError;
+        target.duration_ms = tool.durationMs orelse 0;
+    }
+
+    model.session_count = @min(data.sessions.len, max_sessions);
+    for (data.sessions[0..model.session_count], 0..) |session, index| {
+        const target = &model.sessions[index];
+        target.key = std.hash.Wyhash.hash(0, session.sessionId);
+        target.id_len = copyText(&target.id_storage, session.sessionId);
+        target.prompt_len = copyText(&target.prompt_storage, session.prompt);
+    }
+
+    if (snapshot.pendingPermission) |permission| {
+        model.permission_pending = true;
+        model.permission_id_len = copyText(&model.permission_id_storage, permission.requestId);
+        model.permission_tool_len = copyText(&model.permission_tool_storage, permission.toolName);
+    } else {
+        model.permission_pending = false;
+        model.permission_id_len = 0;
+        model.permission_tool_len = 0;
+    }
+    return true;
+}
+
+fn copyText(destination: anytype, source: []const u8) usize {
+    const len = @min(destination.len, source.len);
+    @memcpy(destination[0..len], source[0..len]);
+    return len;
+}
+
+fn setError(model: *Model, message: []const u8) void {
+    model.error_len = copyText(&model.error_storage, message);
+}
+
+pub fn main(init: std.process.Init) !void {
+    const app_state = try LavalampApp.create(std.heap.page_allocator, .{
+        .name = "lavalamp",
+        .scene = shell_scene,
+        .canvas_label = canvas_label,
+        .update_fx = update,
+        .init_fx = initEffects,
+        .markup = .{ .source = app_markup, .watch_path = "src/app.native", .io = init.io },
+    });
+    defer app_state.destroy();
+    app_state.model = initialModel();
+
+    try runner.runWithOptions(app_state.app(), .{
+        .app_name = "lavalamp",
+        .window_title = "Lavalamp",
+        .bundle_id = "lol.marban.lavalamp",
+        .icon_path = "assets/icon.png",
+        .default_frame = geometry.RectF.init(0, 0, window_width, window_height),
+        .restore_state = true,
+        .js_window_api = false,
+        .security = .{
+            .permissions = &app_permissions,
+            .navigation = .{ .allowed_origins = &.{ "zero://inline", "zero://app" } },
+        },
+    }, init);
+}
+
+test {
+    _ = @import("tests.zig");
+}

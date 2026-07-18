@@ -13,8 +13,10 @@ export class GuiEventStore {
     assistantText: '',
     cursor: 0,
     processing: false,
+    messages: [],
     terminalOutput: '',
     thinkingText: '',
+    tools: [],
     usage: { ...EMPTY_USAGE },
   };
 
@@ -65,6 +67,15 @@ export class GuiEventStore {
           model: event.model,
         };
         break;
+      case 'user.message':
+        this.current = {
+          ...this.current,
+          messages: [
+            ...this.current.messages,
+            { content: event.content, role: 'user' as const },
+          ].slice(-80),
+        };
+        break;
       case 'turn.started':
         this.current = {
           ...this.current,
@@ -91,6 +102,36 @@ export class GuiEventStore {
         this.current = {
           ...this.current,
           terminalOutput: (this.current.terminalOutput + event.chunk).slice(-80_000),
+        };
+        break;
+      case 'tool.started':
+        this.current = {
+          ...this.current,
+          tools: [
+            ...this.current.tools,
+            {
+              id: event.toolCallId,
+              isError: false,
+              name: event.toolName,
+              status: 'running' as const,
+              summary: summarizeArgs(event.args),
+            },
+          ].slice(-30),
+        };
+        break;
+      case 'tool.completed':
+        this.current = {
+          ...this.current,
+          tools: this.current.tools.map((tool) =>
+            tool.id === event.toolCallId
+              ? {
+                  ...tool,
+                  durationMs: event.durationMs,
+                  isError: event.isError,
+                  status: event.isError ? ('failed' as const) : ('completed' as const),
+                }
+              : tool,
+          ),
         };
         break;
       case 'permission.requested':
@@ -125,6 +166,13 @@ export class GuiEventStore {
       case 'turn.completed':
         this.current = {
           ...this.current,
+          messages:
+            this.current.assistantText.length > 0
+              ? [
+                  ...this.current.messages,
+                  { content: this.current.assistantText, role: 'assistant' as const },
+                ].slice(-80)
+              : this.current.messages,
           model: event.model ?? this.current.model,
           processing: false,
           provider: event.provider,
@@ -145,4 +193,15 @@ export class GuiEventStore {
         break;
     }
   }
+}
+
+function summarizeArgs(args: Record<string, unknown>): string {
+  for (const key of ['cmd', 'path', 'query', 'url', 'filePath']) {
+    const value = args[key];
+    if (typeof value === 'string' && value.length > 0) {
+      return value.slice(0, 240);
+    }
+  }
+  const keys = Object.keys(args);
+  return keys.length === 0 ? 'No arguments' : keys.slice(0, 4).join(', ');
 }

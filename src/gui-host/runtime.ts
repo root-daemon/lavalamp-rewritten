@@ -101,6 +101,7 @@ export class GuiRuntime {
     if (trimmed.length === 0) {
       throw new Error('Prompt is required');
     }
+    this.store.append({ content: trimmed, type: 'user.message' });
     return this.process.prompt(trimmed, {
       onError: (error) => {
         this.store.append({ message: error.message, type: 'turn.failed' });

@@ -93,6 +93,7 @@ describe('GUI runtime adapter', () => {
 
     expect(store.after(0).map((event) => event.type)).toEqual([
       'host.ready',
+      'user.message',
       'turn.started',
       'text.delta',
       'tool.started',
