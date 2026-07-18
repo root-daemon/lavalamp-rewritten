@@ -22,6 +22,8 @@ import { ChangeTracker } from '../src/tools/change-tracker.ts';
 import { truncateToolResult } from '../src/tools/result-budget.ts';
 import { readOnlyLocal } from '../src/sandbox/local.ts';
 import {
+  benchmarkCacheDir,
+  benchmarkWorkspaceDir,
   configPathCandidates,
   credentialsPathCandidates,
   memoryPathCandidates,
@@ -60,6 +62,10 @@ describe('path resolution', () => {
     expect(sessionDirs()).toEqual([join(root, 'sessions')]);
     expect(memoryPathCandidates('/workspace')).toHaveLength(1);
     expect(workspaceDataDir('/workspace')).toStartWith(
+      join(root, 'workspaces'),
+    );
+    expect(benchmarkCacheDir()).toBe(join(root, 'benchmarks', 'catalog'));
+    expect(benchmarkWorkspaceDir('/workspace')).toStartWith(
       join(root, 'workspaces'),
     );
 

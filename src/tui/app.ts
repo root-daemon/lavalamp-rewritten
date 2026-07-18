@@ -79,6 +79,18 @@ import { mountInputStack } from './input-stack';
 import { attachmentsForPrompt, type AttachedImage } from './attachments';
 import { formatTuiError } from './errors';
 import { truncateToolResult } from '../tools/result-budget';
+import { BenchmarkCatalog } from '../benchmarks/catalog';
+import { listCustomBenchmarks } from '../benchmarks/custom';
+import { BenchmarkRunStore } from '../benchmarks/run-store';
+import { officialBenchmarkSources } from '../benchmarks/sources';
+import {
+  createBenchmarkBrowserModel,
+  openBenchmarkBrowser,
+} from './benchmarks';
+import {
+  benchmarkCacheDir,
+  benchmarkWorkspaceDir,
+} from '../storage/paths';
 import { AnalyticsRecorder, formatAnalyticsRows } from '../analytics';
 
 export interface TuiOptions {
@@ -150,6 +162,13 @@ export async function startTui(options: TuiOptions): Promise<void> {
   const state = store.getState();
   const lifetime = createTuiLifetime();
   const backupEngine = new BackupEngine(options.cwd);
+  const benchmarkCatalog = new BenchmarkCatalog(
+    benchmarkCacheDir(),
+    officialBenchmarkSources(),
+  );
+  const benchmarkRuns = new BenchmarkRunStore(
+    path.join(benchmarkWorkspaceDir(options.cwd), 'runs'),
+  );
   const backupHistory: string[] = [];
   let turnBackupCreated = false;
   const attachedImages: AttachedImage[] = [];
@@ -1168,6 +1187,25 @@ export async function startTui(options: TuiOptions): Promise<void> {
     }
     showMainTui();
     inputField.focus();
+  }
+
+  async function loadBenchmarkBrowserModel(refresh: boolean) {
+    const snapshots = (
+      await Promise.all(
+        benchmarkCatalog.ids().map(async (id) => {
+          try {
+            return await benchmarkCatalog.get(id, refresh);
+          } catch {
+            return null;
+          }
+        }),
+      )
+    ).filter((item) => item !== null);
+    return createBenchmarkBrowserModel(
+      snapshots,
+      listCustomBenchmarks(cwd),
+      benchmarkRuns.list(),
+    );
   }
 
   function finalizeToolGroup() {
@@ -2342,6 +2380,21 @@ export async function startTui(options: TuiOptions): Promise<void> {
           break;
         }
         showModelPicker();
+        break;
+      }
+      case '/benchmark':
+      case '/benchmarks': {
+        const model = await loadBenchmarkBrowserModel(false);
+        openBenchmarkBrowser({
+          closeViewer,
+          hideMainTui,
+          model,
+          nextId,
+          onError: (message) => addInfoLine(`  benchmark: ${message}`, COLORS.red),
+          overlay: viewerOverlay,
+          refresh: () => loadBenchmarkBrowserModel(true),
+          renderer,
+        });
         break;
       }
       case '/gateway': {
