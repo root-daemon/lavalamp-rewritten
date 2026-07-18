@@ -177,6 +177,19 @@ export interface GuiRepoStatusSnapshot {
   error?: string;
 }
 
+export interface GuiRuntimeStatusSnapshot {
+  authLabel: string;
+  authRequired: boolean;
+  backend: AgentBackend;
+  gatewayEnabled: boolean;
+  gatewayId: string;
+  gatewaySupported: boolean;
+  model: string;
+  provider: string;
+  routeLabel: string;
+  routeMode: 'direct' | 'gateway' | 'codex';
+}
+
 export interface GuiMessageSnapshot {
   role: 'user' | 'assistant';
   content: string;

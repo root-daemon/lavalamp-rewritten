@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import type { GuiPermissionDecision } from '../src/gui-host/contracts';
+import type {
+  GuiPermissionDecision,
+  GuiRuntimeStatusSnapshot,
+} from '../src/gui-host/contracts';
 import { GuiEventStore } from '../src/gui-host/event-store';
 import {
   createGuiHostServer,
@@ -29,6 +32,21 @@ class FakeRuntime implements GuiHostRuntime {
 
   cancel(): void {
     this.cancelled = true;
+  }
+
+  runtimeStatus(): GuiRuntimeStatusSnapshot {
+    return {
+      authLabel: 'Auth ready',
+      authRequired: false,
+      backend: 'flue',
+      gatewayEnabled: true,
+      gatewayId: 'team',
+      gatewaySupported: true,
+      model: 'model-a',
+      provider: 'cloudflare-workers-ai',
+      routeLabel: 'cloudflare-workers-ai gateway (team)',
+      routeMode: 'gateway',
+    };
   }
 
   async shutdown(): Promise<void> {}
@@ -191,6 +209,11 @@ describe('GUI host server', () => {
           branch: 'not a git repository',
           git: false,
           status: 'Git unavailable',
+        },
+        runtimeStatus: {
+          authLabel: 'Auth ready',
+          routeLabel: 'cloudflare-workers-ai gateway (team)',
+          routeMode: 'gateway',
         },
         sessions: [{ sessionId: 'session-a' }],
         snapshot: { processing: true },

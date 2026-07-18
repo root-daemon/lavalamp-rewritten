@@ -9,15 +9,23 @@ import { attachmentsForPrompt, type AttachedImage } from '../tui/attachments';
 import type { TuiLoginProgress } from '../tui/login';
 import { loginFromTui } from '../tui/login';
 import type { AgentBackend } from '../runtime/backend';
+import { loadCredentials } from '../auth/credentials';
+import { BUILD_MODEL } from '../config/models';
 import { resolveConfig } from '../config/user-config';
+import { resolveRuntimeRoute, routeSummary } from '../config/runtime-route';
 import { createRuntimeProcess } from '../runtime/process';
+import { isCodexLoginRequired } from '../runtime/codex/runtime';
 import type { RuntimeCallbacks, RuntimeMode, RuntimeModel } from '../runtime/types';
 import { AnalyticsRecorder, type RunRating } from '../analytics';
 import { SubAgentManager } from '../tui/subs';
 import type { SubAgent } from '../tui/state';
 import { BackupEngine } from '../storage/backups';
 import { planMutationBackup } from '../storage/mutation-backups';
-import type { GuiPermissionDecision, GuiSubagentSnapshot } from './contracts';
+import type {
+  GuiPermissionDecision,
+  GuiRuntimeStatusSnapshot,
+  GuiSubagentSnapshot,
+} from './contracts';
 import { GuiEventStore } from './event-store';
 
 export interface GuiProcess {
@@ -194,6 +202,48 @@ export class GuiRuntime {
 
   workspaceRoot(): string | undefined {
     return this.workspace;
+  }
+
+  runtimeStatus(): GuiRuntimeStatusSnapshot {
+    if (this.backend === 'codex') {
+      const config = resolveConfig();
+      const model = this.model ?? (config.codexModel || 'server default');
+      const authRequired = isCodexLoginRequired(this.process.account);
+      return {
+        authLabel: authRequired ? 'Codex login required' : 'Codex authenticated',
+        authRequired,
+        backend: 'codex',
+        gatewayEnabled: false,
+        gatewayId: '',
+        gatewaySupported: false,
+        model,
+        provider: 'codex',
+        routeLabel: 'Codex app-server',
+        routeMode: 'codex',
+      };
+    }
+
+    const config = resolveConfig();
+    const route = resolveRuntimeRoute({
+      config,
+      env: process.env as Record<string, string | undefined>,
+      model: this.model,
+      preferredModel: BUILD_MODEL,
+    });
+    const credentials = loadCredentials();
+    const authRequired = route.requiresCloudflareAuth && credentials === null;
+    return {
+      authLabel: authRequired ? 'Cloudflare login required' : 'Auth ready',
+      authRequired,
+      backend: 'flue',
+      gatewayEnabled: config.gatewayEnabled,
+      gatewayId: config.gatewayId,
+      gatewaySupported: route.gatewaySupported,
+      model: route.model,
+      provider: route.provider ?? 'unknown',
+      routeLabel: routeSummary(route),
+      routeMode: route.mode,
+    };
   }
 
   async switchWorkspace(workspace: string): Promise<void> {

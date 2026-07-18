@@ -257,6 +257,7 @@ pub const Model = struct {
         "workspace_storage", "workspace_len", "model_storage", "model_len",
         "workspace_branch_storage", "workspace_branch_len", "workspace_summary_storage", "workspace_summary_len", "workspace_git", "workspace_clean",
         "repo_git", "repo_storage", "repo_len", "repo_head_storage", "repo_head_len", "repo_remote_storage", "repo_remote_len", "repo_pr_storage", "repo_pr_len", "repo_pr_title_storage", "repo_pr_title_len", "repo_review_storage", "repo_review_len", "repo_check_summary_storage", "repo_check_summary_len", "repo_actions_storage", "repo_actions_len",
+        "runtime_route_storage", "runtime_route_len", "runtime_auth_storage", "runtime_auth_len", "runtime_gateway_storage", "runtime_gateway_len", "runtime_auth_required",
         "provider_storage", "provider_len", "backend_storage", "backend_len", "mode_storage", "mode_len", "permission_id_storage", "permission_id_len",
         "permission_tool_storage", "permission_tool_len", "pending_question", "question_id_storage", "question_id_len", "question_text_storage", "question_text_len",
         "question_body_storage", "messages", "message_count",
@@ -306,6 +307,13 @@ pub const Model = struct {
     repo_check_summary_len: usize = 0,
     repo_actions_storage: [360]u8 = undefined,
     repo_actions_len: usize = 0,
+    runtime_route_storage: [160]u8 = undefined,
+    runtime_route_len: usize = 0,
+    runtime_auth_storage: [160]u8 = undefined,
+    runtime_auth_len: usize = 0,
+    runtime_gateway_storage: [160]u8 = undefined,
+    runtime_gateway_len: usize = 0,
+    runtime_auth_required: bool = false,
     model_storage: [256]u8 = undefined,
     model_len: usize = 0,
     provider_storage: [96]u8 = undefined,
@@ -409,6 +417,18 @@ pub const Model = struct {
     pub fn repoActionsLabel(self: *const Model) []const u8 {
         if (self.repo_actions_len == 0) return "CI link unavailable";
         return self.repo_actions_storage[0..self.repo_actions_len];
+    }
+    pub fn runtimeRouteLabel(self: *const Model) []const u8 {
+        if (self.runtime_route_len == 0) return "Route pending";
+        return self.runtime_route_storage[0..self.runtime_route_len];
+    }
+    pub fn runtimeAuthLabel(self: *const Model) []const u8 {
+        if (self.runtime_auth_len == 0) return "Auth pending";
+        return self.runtime_auth_storage[0..self.runtime_auth_len];
+    }
+    pub fn runtimeGatewayLabel(self: *const Model) []const u8 {
+        if (self.runtime_gateway_len == 0) return "Gateway unavailable";
+        return self.runtime_gateway_storage[0..self.runtime_gateway_len];
     }
     pub fn modelLabel(self: *const Model) []const u8 {
         if (self.model_len == 0) return "Default model";
@@ -1166,12 +1186,25 @@ const RepoStatusPayload = struct {
     checks: []const RepoCheckPayload = &.{},
     worktrees: []const RepoWorktreePayload = &.{},
 };
+const RuntimeStatusPayload = struct {
+    authLabel: []const u8 = "",
+    authRequired: bool = false,
+    backend: []const u8 = "",
+    gatewayEnabled: bool = false,
+    gatewayId: []const u8 = "",
+    gatewaySupported: bool = false,
+    model: []const u8 = "",
+    provider: []const u8 = "",
+    routeLabel: []const u8 = "",
+    routeMode: []const u8 = "",
+};
 const NativeData = struct {
     snapshot: SnapshotPayload = .{},
     sessions: []const SessionPayload = &.{},
     models: []const ModelPayload = &.{},
     workspaceStatus: WorkspaceStatusPayload = .{},
     repoStatus: RepoStatusPayload = .{},
+    runtimeStatus: ?RuntimeStatusPayload = null,
 };
 const NativeEnvelope = struct { ok: bool = false, data: ?NativeData = null };
 const SessionData = struct {
@@ -1250,6 +1283,28 @@ pub fn applySnapshotJson(model: *Model, body: []const u8) bool {
     model.error_len = copyText(&model.error_storage, snapshot.@"error" orelse "");
     model.total_tokens = snapshot.usage.totalTokens;
     model.total_cost = snapshot.usage.cost;
+
+    if (data.runtimeStatus) |status| {
+        model.runtime_route_len = copyText(&model.runtime_route_storage, status.routeLabel);
+        model.runtime_auth_len = copyText(&model.runtime_auth_storage, status.authLabel);
+        model.runtime_auth_required = status.authRequired;
+        if (model.model_len == 0) model.model_len = copyText(&model.model_storage, status.model);
+        if (model.provider_len == 0) model.provider_len = copyText(&model.provider_storage, status.provider);
+        if (model.backend_len == 0) model.backend_len = copyText(&model.backend_storage, status.backend);
+        var gateway_buffer: [160]u8 = undefined;
+        const gateway_label = if (status.gatewayEnabled)
+            std.fmt.bufPrint(&gateway_buffer, "Gateway {s} · {s}", .{ status.gatewayId, status.routeMode }) catch status.routeLabel
+        else if (status.gatewaySupported)
+            "Gateway available · direct"
+        else
+            "Gateway unavailable";
+        model.runtime_gateway_len = copyText(&model.runtime_gateway_storage, gateway_label);
+    } else {
+        model.runtime_route_len = 0;
+        model.runtime_auth_len = 0;
+        model.runtime_gateway_len = 0;
+        model.runtime_auth_required = false;
+    }
 
     model.message_count = @min(snapshot.messages.len, max_messages);
     for (snapshot.messages[0..model.message_count], 0..) |message, index| {

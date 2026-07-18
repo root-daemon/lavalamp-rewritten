@@ -235,6 +235,23 @@
 
             <column gap="8">
               <text foreground="text_muted">Provider</text>
+              <panel padding="10">
+                <column gap="7">
+                  <row gap="8" cross="center">
+                    <icon name="circle-dot" size="sm" />
+                    <column gap="2" grow="1">
+                      <text wrap="true">{runtimeRouteLabel}</text>
+                      <text wrap="true" foreground="text_muted">{providerLabel} · {runtimeGatewayLabel}</text>
+                    </column>
+                  </row>
+                  <if test="{runtime_auth_required}">
+                    <alert variant="warning">{runtimeAuthLabel}</alert>
+                  </if>
+                  <else>
+                    <text foreground="text_muted">{runtimeAuthLabel}</text>
+                  </else>
+                </column>
+              </panel>
               <button-group gap="4">
                 <button size="sm" variant="ghost" on-press="backend_flue">Flue</button>
                 <button size="sm" variant="ghost" on-press="backend_codex">Codex</button>

@@ -13,6 +13,7 @@ import type { RuntimeCallbacks } from '../src/runtime/types';
 import type { SubAgent } from '../src/tui/state';
 
 class FakeProcess implements GuiProcess {
+  account?: unknown;
   callbacks?: RuntimeCallbacks;
   images: PromptImage[] | undefined;
   isProcessing = false;
@@ -346,6 +347,25 @@ describe('GUI runtime adapter', () => {
       messages: [],
       processing: false,
       workspace: '/repo-worktree',
+    });
+  });
+
+  test('reports Codex authentication requirement for GUI status surfaces', () => {
+    const process = new FakeProcess();
+    process.account = { account: null, requiresOpenaiAuth: true };
+    const runtime = new GuiRuntime({
+      backend: 'codex',
+      process,
+      store: new GuiEventStore(),
+    });
+
+    expect(runtime.runtimeStatus()).toMatchObject({
+      authLabel: 'Codex login required',
+      authRequired: true,
+      backend: 'codex',
+      provider: 'codex',
+      routeLabel: 'Codex app-server',
+      routeMode: 'codex',
     });
   });
 

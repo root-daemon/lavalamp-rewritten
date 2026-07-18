@@ -1,6 +1,7 @@
 import type { GuiPermissionDecision } from './contracts';
 import type { GuiMessageSnapshot } from './contracts';
 import type { GuiCommandResult } from './contracts';
+import type { GuiRuntimeStatusSnapshot } from './contracts';
 import type { GuiEventStore } from './event-store';
 import { parseBackend, type AgentBackend } from '../runtime/backend';
 import type { RuntimeMode, RuntimeModel } from '../runtime/types';
@@ -19,6 +20,7 @@ export interface GuiHostRuntime {
   compact?(): Promise<void>;
   undo?(): Promise<unknown>;
   listModels?(): Promise<RuntimeModel[]>;
+  runtimeStatus?(): GuiRuntimeStatusSnapshot;
   respondPermission(requestId: string, decision: GuiPermissionDecision): void;
   respondQuestion(
     requestId: string,
@@ -145,6 +147,7 @@ export function createGuiHostServer(
           return success({
             models: await modelList(options),
             repoStatus: current.repoStatus.read(),
+            runtimeStatus: options.runtime.runtimeStatus?.(),
             sessions: options.listSessions?.() ?? [],
             snapshot: options.runtime.store.snapshot(),
             workspaceStatus: current.workspaceStatus.read(),
