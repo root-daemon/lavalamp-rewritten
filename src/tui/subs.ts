@@ -2,6 +2,48 @@ import { FlueProcess } from './ipc';
 import type { FlueEvent, FlueResult } from './ipc';
 import type { SubAgent } from './state';
 import type { AnalyticsRecorder } from '../analytics';
+import type {
+  RuntimeSubagent,
+  RuntimeSubagentInspection,
+  RuntimeSubagentStatus,
+} from '../runtime/types';
+
+const FLUE_STATUS: Record<SubAgent['status'], RuntimeSubagentStatus> = {
+  done: 'completed',
+  failed: 'failed',
+  killed: 'stopped',
+  running: 'running',
+  timed_out: 'failed',
+};
+
+export function projectFlueSubagent(subagent: SubAgent): RuntimeSubagent {
+  return {
+    id: subagent.id,
+    name: subagent.id,
+    task: subagent.query,
+    status: FLUE_STATUS[subagent.status],
+    startedAt: subagent.startTime,
+    ...(subagent.result === undefined || subagent.result.length === 0
+      ? {}
+      : { result: subagent.result }),
+    ...(subagent.error === undefined ? {} : { error: subagent.error }),
+  };
+}
+
+export function inspectFlueSubagent(
+  subagent: SubAgent,
+): RuntimeSubagentInspection {
+  const content = subagent.result?.trim() || subagent.error?.trim();
+  return {
+    messages: [
+      { content: subagent.query, role: 'user' },
+      ...(content === undefined
+        ? []
+        : [{ content, role: 'assistant' as const }]),
+    ],
+    subagent: projectFlueSubagent(subagent),
+  };
+}
 
 export class SubAgentManager {
   private readonly subs = new Map<
@@ -93,6 +135,10 @@ export class SubAgentManager {
         error,
       }) => ({ error, id, pid, query, result, startTime, status }),
     );
+  }
+
+  get(id: string): SubAgent | undefined {
+    return this.list().find((subagent) => subagent.id === id);
   }
 
   isDeploying(): boolean {

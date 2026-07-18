@@ -5,6 +5,12 @@ import type {
   QuestionRequestMsg,
 } from '../tui/ipc';
 import type { AgentBackend } from './backend';
+import type { AnalyticsRecorder } from '../analytics';
+import {
+  inspectFlueSubagent,
+  projectFlueSubagent,
+  SubAgentManager,
+} from '../tui/subs';
 import { CodexProcess } from './codex/runtime';
 import type {
   RuntimeCallbacks,
@@ -49,6 +55,10 @@ export interface RuntimeProcess {
   inspectSubagent(id: string): Promise<RuntimeSubagentInspection>;
   stopSubagent(id: string): Promise<void>;
   deploySubagents(queries: string[]): Promise<void>;
+  setSubagentAnalytics?(
+    analytics: AnalyticsRecorder,
+    parentTurn?: () => string | undefined,
+  ): void;
 }
 
 export interface CreateRuntimeProcessOptions {
@@ -82,6 +92,9 @@ export function createRuntimeProcess(options: CreateRuntimeProcessOptions): Runt
 class FlueRuntimeProcess implements RuntimeProcess {
   readonly backend = 'flue' as const;
   private readonly process: FlueProcess;
+  private readonly subagents: SubAgentManager;
+  onSubagentsChanged?: (subagents: RuntimeSubagent[]) => void;
+  onSubagentsComplete?: (summary: string) => void;
 
   constructor(options: CreateRuntimeProcessOptions) {
     this.process = new FlueProcess(
@@ -90,6 +103,17 @@ class FlueRuntimeProcess implements RuntimeProcess {
       options.agentName,
       options.sessionId,
     );
+    this.subagents = new SubAgentManager(
+      options.serverPath,
+      options.cwd,
+      options.agentName,
+    );
+    this.subagents.onUpdate = (subagents) => {
+      this.onSubagentsChanged?.(subagents.map(projectFlueSubagent));
+    };
+    this.subagents.onAllComplete = (summary) => {
+      this.onSubagentsComplete?.(summary);
+    };
   }
 
   get isProcessing(): boolean { return this.process.isProcessing; }
@@ -102,7 +126,10 @@ class FlueRuntimeProcess implements RuntimeProcess {
   start() { return this.process.start(); }
   cancel() { this.process.cancel(); }
   restart() { return this.process.restart(); }
-  shutdown() { return this.process.shutdown(); }
+  shutdown() {
+    this.subagents.killAll();
+    return this.process.shutdown();
+  }
   setAgentName(name: string) { this.process.setAgentName(name); }
   sendPermissionResponse(requestId: string, decision: 'allow' | 'deny', alwaysAllow?: boolean) {
     this.process.sendPermissionResponse(requestId, decision, alwaysAllow);
@@ -120,10 +147,26 @@ class FlueRuntimeProcess implements RuntimeProcess {
     }, sessionId, images);
   }
 
-  listSubagents(): RuntimeSubagent[] { return []; }
-  async inspectSubagent(id: string): Promise<RuntimeSubagentInspection> {
-    throw new Error(`Subagent not found: ${id}`);
+  listSubagents(): RuntimeSubagent[] {
+    return this.subagents.list().map(projectFlueSubagent);
   }
-  async stopSubagent(_id: string): Promise<void> {}
-  async deploySubagents(_queries: string[]): Promise<void> {}
+  async inspectSubagent(id: string): Promise<RuntimeSubagentInspection> {
+    const subagent = this.subagents.get(id);
+    if (subagent === undefined) {
+      throw new Error(`Subagent not found: ${id}`);
+    }
+    return inspectFlueSubagent(subagent);
+  }
+  async stopSubagent(id: string): Promise<void> {
+    this.subagents.kill(id);
+  }
+  deploySubagents(queries: string[]): Promise<void> {
+    return this.subagents.deploy(queries);
+  }
+  setSubagentAnalytics(
+    analytics: AnalyticsRecorder,
+    parentTurn?: () => string | undefined,
+  ): void {
+    this.subagents.setAnalytics(analytics, parentTurn);
+  }
 }
