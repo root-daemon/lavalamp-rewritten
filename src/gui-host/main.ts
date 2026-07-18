@@ -697,9 +697,25 @@ function readMcpConfig(): GuiCommandResult {
     };
     const servers = cfg.mcpServers ?? cfg.mcp ?? {};
     const names = Object.keys(servers);
+    if (names.length === 0) {
+      return { title: '/mcp', rows: ['No MCP servers configured.'] };
+    }
+    const rows = ['MCP servers:'];
+    for (const name of names) {
+      const value = servers[name];
+      const server = value !== null && typeof value === 'object'
+        ? (value as { args?: unknown; command?: unknown })
+        : {};
+      const command = typeof server.command === 'string' ? server.command : '';
+      const args = Array.isArray(server.args) ? server.args.join(' ') : '';
+      rows.push(name);
+      if (command.length > 0) {
+        rows.push(`${command} ${args}`.trim());
+      }
+    }
     return {
       title: '/mcp',
-      rows: names.length === 0 ? ['No MCP servers configured.'] : names,
+      rows,
     };
   } catch {
     return { title: '/mcp', rows: ['No MCP config found.'] };

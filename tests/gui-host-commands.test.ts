@@ -189,6 +189,43 @@ describe('GUI host commands', () => {
     ]);
   });
 
+  test('renders MCP servers with command and args like the TUI command', async () => {
+    const { runtime, workspace } = fixture();
+    const previousHome = process.env.HOME;
+    const fakeHome = join(root, 'fake-home');
+    const configDir = join(fakeHome, '.config', 'opencode');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'opencode.json'),
+      JSON.stringify({
+        mcpServers: {
+          browser: {
+            args: ['--port', '9222'],
+            command: 'npx',
+          },
+          memory: {},
+        },
+      }),
+    );
+
+    try {
+      process.env.HOME = fakeHome;
+      const mcp = await runGuiCommand(runtime, workspace, '/server.mjs', '/mcp');
+      expect(mcp.rows).toEqual([
+        'MCP servers:',
+        'browser',
+        'npx --port 9222',
+        'memory',
+      ]);
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+    }
+  });
+
   test('undo restores workspace backup for mutating tool calls', async () => {
     const { process, runtime, workspace } = fixture();
     const target = join(workspace, 'tracked.txt');
