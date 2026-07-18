@@ -41,9 +41,11 @@ pub const poll_timer_key: u64 = 101;
 const poll_fetch_key: u64 = 102;
 const action_fetch_key: u64 = 103;
 const session_fetch_key: u64 = 104;
+const subagent_fetch_key: u64 = 105;
 const max_messages = 40;
 const max_tools = 24;
 const max_sessions = 16;
+const max_subagents = 16;
 
 const Role = enum { user, assistant };
 
@@ -106,6 +108,35 @@ pub const Session = struct {
     }
 };
 
+pub const Subagent = struct {
+    key: u64 = 0,
+    id_storage: [128]u8 = undefined,
+    id_len: usize = 0,
+    name_storage: [128]u8 = undefined,
+    name_len: usize = 0,
+    task_storage: [512]u8 = undefined,
+    task_len: usize = 0,
+    status_storage: [24]u8 = undefined,
+    status_len: usize = 0,
+    selected: bool = false,
+
+    pub fn id(self: *const Subagent) []const u8 {
+        return self.id_storage[0..self.id_len];
+    }
+    pub fn name(self: *const Subagent) []const u8 {
+        return self.name_storage[0..self.name_len];
+    }
+    pub fn task(self: *const Subagent) []const u8 {
+        return self.task_storage[0..self.task_len];
+    }
+    pub fn status(self: *const Subagent) []const u8 {
+        return self.status_storage[0..self.status_len];
+    }
+    pub fn running(self: *const Subagent) bool {
+        return std.mem.eql(u8, self.status(), "running") or std.mem.eql(u8, self.status(), "pending");
+    }
+};
+
 pub const Model = struct {
     pub const view_unbound = .{
         "connected", "cursor", "host_port", "auth_token_storage", "auth_token_len",
@@ -114,7 +145,7 @@ pub const Model = struct {
         "workspace_storage", "workspace_len", "model_storage", "model_len",
         "provider_storage", "provider_len", "permission_id_storage", "permission_id_len",
         "permission_tool_storage", "permission_tool_len", "messages", "message_count",
-        "tools", "tool_count", "sessions", "session_count", "selected_session_key", "total_tokens", "total_cost", "assistantText", "authToken",
+        "tools", "tool_count", "sessions", "session_count", "selected_session_key", "subagents", "subagent_count", "selected_subagent_key", "subagent_transcript_storage", "subagent_transcript_len", "total_tokens", "total_cost", "assistantText", "authToken",
         "permissionId", "hasMessages",
     };
 
@@ -151,6 +182,11 @@ pub const Model = struct {
     sessions: [max_sessions]Session = [_]Session{.{}} ** max_sessions,
     session_count: usize = 0,
     selected_session_key: u64 = 0,
+    subagents: [max_subagents]Subagent = [_]Subagent{.{}} ** max_subagents,
+    subagent_count: usize = 0,
+    selected_subagent_key: u64 = 0,
+    subagent_transcript_storage: [32768]u8 = undefined,
+    subagent_transcript_len: usize = 0,
     total_tokens: u64 = 0,
     total_cost: f64 = 0,
 
@@ -199,11 +235,29 @@ pub const Model = struct {
     pub fn sessionItems(self: *const Model) []const Session {
         return self.sessions[0..self.session_count];
     }
+    pub fn subagentItems(self: *const Model) []const Subagent {
+        return self.subagents[0..self.subagent_count];
+    }
+    pub fn subagentTranscript(self: *const Model) []const u8 {
+        return self.subagent_transcript_storage[0..self.subagent_transcript_len];
+    }
     fn selectedSessionId(self: *const Model) []const u8 {
         for (self.sessions[0..self.session_count]) |*session| {
             if (session.key == self.selected_session_key) return session.id();
         }
         return "";
+    }
+    fn selectedSubagentId(self: *const Model) []const u8 {
+        for (self.subagents[0..self.subagent_count]) |*subagent| {
+            if (subagent.key == self.selected_subagent_key) return subagent.id();
+        }
+        return "";
+    }
+    pub fn selectedSubagentRunning(self: *const Model) bool {
+        for (self.subagents[0..self.subagent_count]) |*subagent| {
+            if (subagent.key == self.selected_subagent_key) return subagent.running();
+        }
+        return false;
     }
     pub fn hasMessages(self: *const Model) bool {
         return self.message_count > 0;
@@ -216,6 +270,12 @@ pub const Model = struct {
     }
     pub fn hasTools(self: *const Model) bool {
         return self.tool_count > 0;
+    }
+    pub fn hasSubagents(self: *const Model) bool {
+        return self.subagent_count > 0;
+    }
+    pub fn hasSubagentTranscript(self: *const Model) bool {
+        return self.subagent_transcript_len > 0;
     }
     pub fn usageLabel(self: *const Model, arena: std.mem.Allocator) []const u8 {
         return std.fmt.allocPrint(arena, "{d} tokens · ${d:.4}", .{ self.total_tokens, self.total_cost }) catch "Usage unavailable";
@@ -251,6 +311,8 @@ pub const Msg = union(enum) {
     cancel,
     new_chat,
     select_session: u64,
+    select_subagent: u64,
+    stop_subagent,
     allow_permission,
     always_allow_permission,
     deny_permission,
@@ -260,8 +322,9 @@ pub const Msg = union(enum) {
     snapshot_response: native_sdk.EffectResponse,
     action_response: native_sdk.EffectResponse,
     session_response: native_sdk.EffectResponse,
+    subagent_response: native_sdk.EffectResponse,
 
-    pub const view_unbound = .{ "host_line", "host_exit", "poll_tick", "snapshot_response", "action_response", "session_response" };
+    pub const view_unbound = .{ "host_line", "host_exit", "poll_tick", "snapshot_response", "action_response", "session_response", "subagent_response" };
 };
 
 pub const Effects = native_sdk.Effects(Msg);
@@ -300,6 +363,8 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             for (model.sessions[0..model.session_count]) |*session| session.selected = false;
         },
         .select_session => |key| selectSession(model, key, fx),
+        .select_subagent => |key| selectSubagent(model, key, fx),
+        .stop_subagent => stopSubagent(model, fx),
         .allow_permission => resolvePermission(model, fx, "allow"),
         .always_allow_permission => resolvePermission(model, fx, "always_allow"),
         .deny_permission => resolvePermission(model, fx, "deny"),
@@ -330,6 +395,13 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 return;
             }
             if (!applySessionJson(model, response.body)) setError(model, "Invalid session response");
+        },
+        .subagent_response => |response| {
+            if (response.outcome != .ok or response.status < 200 or response.status >= 300) {
+                setError(model, "Could not inspect selected subagent");
+                return;
+            }
+            if (!applySubagentInspectionJson(model, response.body)) setError(model, "Invalid subagent response");
         },
     }
 }
@@ -450,6 +522,47 @@ fn selectSession(model: *Model, key: u64, fx: *Effects) void {
     });
 }
 
+fn selectSubagent(model: *Model, key: u64, fx: *Effects) void {
+    model.selected_subagent_key = key;
+    var subagent_id: []const u8 = "";
+    for (model.subagents[0..model.subagent_count]) |*subagent| {
+        subagent.selected = subagent.key == key;
+        if (subagent.selected) subagent_id = subagent.id();
+    }
+    model.subagent_transcript_len = 0;
+    if (subagent_id.len == 0) return;
+
+    var path_buffer: [256]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buffer, "/v1/subagents/{s}", .{subagent_id}) catch return;
+    var url_buffer: [320]u8 = undefined;
+    var auth_buffer: [192]u8 = undefined;
+    const headers = [_]std.http.Header{.{ .name = "authorization", .value = authHeader(model, &auth_buffer) }};
+    fx.fetch(.{
+        .key = subagent_fetch_key,
+        .url = endpoint(model, &url_buffer, path),
+        .headers = &headers,
+        .timeout_ms = 4_000,
+        .on_response = Effects.responseMsg(.subagent_response),
+    });
+}
+
+fn stopSubagent(model: *Model, fx: *Effects) void {
+    const subagent_id = model.selectedSubagentId();
+    if (subagent_id.len == 0 or !model.selectedSubagentRunning()) return;
+    var path_buffer: [272]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buffer, "/v1/subagents/{s}/stop", .{subagent_id}) catch return;
+    var url_buffer: [336]u8 = undefined;
+    var auth_buffer: [192]u8 = undefined;
+    const headers = [_]std.http.Header{.{ .name = "authorization", .value = authHeader(model, &auth_buffer) }};
+    fx.fetch(.{
+        .key = action_fetch_key,
+        .method = .POST,
+        .url = endpoint(model, &url_buffer, path),
+        .headers = &headers,
+        .on_response = Effects.responseMsg(.action_response),
+    });
+}
+
 fn resolvePermission(model: *Model, fx: *Effects, decision: []const u8) void {
     if (!model.permission_pending) return;
     var path_buffer: [256]u8 = undefined;
@@ -490,6 +603,12 @@ const ToolPayload = struct {
     isError: bool = false,
     durationMs: ?u64 = null,
 };
+const SubagentPayload = struct {
+    id: []const u8 = "",
+    name: []const u8 = "",
+    task: []const u8 = "",
+    status: []const u8 = "pending",
+};
 const PendingPermissionPayload = struct { requestId: []const u8 = "", toolName: []const u8 = "" };
 const SnapshotPayload = struct {
     cursor: u64 = 0,
@@ -505,6 +624,7 @@ const SnapshotPayload = struct {
     usage: UsagePayload = .{},
     messages: []const MessagePayload = &.{},
     tools: []const ToolPayload = &.{},
+    subagents: []const SubagentPayload = &.{},
 };
 const SessionPayload = struct { sessionId: []const u8 = "", prompt: []const u8 = "" };
 const ModelPayload = struct { id: []const u8 = "", displayName: []const u8 = "" };
@@ -519,6 +639,31 @@ const SessionData = struct {
     messages: []const MessagePayload = &.{},
 };
 const SessionEnvelope = struct { ok: bool = false, data: ?SessionData = null };
+const SubagentInspectionData = struct {
+    subagent: SubagentPayload = .{},
+    messages: []const MessagePayload = &.{},
+};
+const SubagentInspectionEnvelope = struct { ok: bool = false, data: ?SubagentInspectionData = null };
+
+pub fn applySubagentInspectionJson(model: *Model, body: []const u8) bool {
+    var parse_storage: [128 * 1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&parse_storage);
+    const envelope = std.json.parseFromSliceLeaky(
+        SubagentInspectionEnvelope,
+        fba.allocator(),
+        body,
+        .{ .ignore_unknown_fields = true },
+    ) catch return false;
+    if (!envelope.ok) return false;
+    const data = envelope.data orelse return false;
+    model.subagent_transcript_len = 0;
+    for (data.messages, 0..) |message, index| {
+        if (index > 0) appendText(&model.subagent_transcript_storage, &model.subagent_transcript_len, "\n\n");
+        appendText(&model.subagent_transcript_storage, &model.subagent_transcript_len, if (std.mem.eql(u8, message.role, "user")) "## User\n\n" else "## Assistant\n\n");
+        appendText(&model.subagent_transcript_storage, &model.subagent_transcript_len, message.content);
+    }
+    return true;
+}
 
 pub fn applySessionJson(model: *Model, body: []const u8) bool {
     var parse_storage: [128 * 1024]u8 = undefined;
@@ -578,6 +723,17 @@ pub fn applySnapshotJson(model: *Model, body: []const u8) bool {
         target.duration_ms = tool.durationMs orelse 0;
     }
 
+    model.subagent_count = @min(snapshot.subagents.len, max_subagents);
+    for (snapshot.subagents[0..model.subagent_count], 0..) |subagent, index| {
+        const target = &model.subagents[index];
+        target.key = std.hash.Wyhash.hash(0, subagent.id);
+        target.id_len = copyText(&target.id_storage, subagent.id);
+        target.name_len = copyText(&target.name_storage, subagent.name);
+        target.task_len = copyText(&target.task_storage, subagent.task);
+        target.status_len = copyText(&target.status_storage, subagent.status);
+        target.selected = target.key == model.selected_subagent_key;
+    }
+
     model.session_count = @min(data.sessions.len, max_sessions);
     for (data.sessions[0..model.session_count], 0..) |session, index| {
         const target = &model.sessions[index];
@@ -603,6 +759,13 @@ fn copyText(destination: anytype, source: []const u8) usize {
     const len = @min(destination.len, source.len);
     @memcpy(destination[0..len], source[0..len]);
     return len;
+}
+
+fn appendText(destination: anytype, offset: *usize, source: []const u8) void {
+    if (offset.* >= destination.len) return;
+    const len = @min(destination.len - offset.*, source.len);
+    @memcpy(destination[offset.*..][0..len], source[0..len]);
+    offset.* += len;
 }
 
 fn setError(model: *Model, message: []const u8) void {
