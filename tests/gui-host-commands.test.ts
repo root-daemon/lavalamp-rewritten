@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GuiEventStore } from '../src/gui-host/event-store';
-import { runGuiCommand } from '../src/gui-host/main';
+import { GUI_HANDLED_COMMANDS, runGuiCommand } from '../src/gui-host/main';
 import {
   GuiRuntime,
   type GuiProcess,
@@ -16,6 +16,7 @@ import type { PermissionDecision, PromptImage } from '../src/tui/ipc';
 import type { SubAgent } from '../src/tui/state';
 import type { RuntimeCallbacks } from '../src/runtime/types';
 import type { BenchmarkRun } from '../src/benchmarks/types';
+import { HELP_COMMANDS } from '../src/tui/slash-data';
 
 class FakeProcess implements GuiProcess {
   readonly backend = 'flue' as const;
@@ -121,6 +122,13 @@ function fixture() {
 }
 
 describe('GUI host commands', () => {
+  test('tracks every TUI slash command in the GUI command surface', () => {
+    const handled = new Set<string>(GUI_HANDLED_COMMANDS);
+    for (const [command] of HELP_COMMANDS) {
+      expect(handled.has(command)).toBe(true);
+    }
+  });
+
   test('renders real analytics and benchmark command output', async () => {
     const { runtime, workspace } = fixture();
     const analytics = await runGuiCommand(runtime, workspace, '/server.mjs', '/analytics');

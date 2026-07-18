@@ -190,6 +190,24 @@ test "new chat resets view and clears the backend session" {
     try testing.expectEqualStrings("/clear", request.body);
 }
 
+test "quit command is available through native actions" {
+    var model = main.initialModel();
+    model.connected = true;
+    model.host_port = 34197;
+    model.setAuthToken("token-123");
+
+    var fx = main.Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+
+    main.update(&model, .command_quit, &fx);
+
+    try testing.expectEqual(@as(usize, 1), fx.pendingFetchCount());
+    const request = fx.pendingFetchAt(0).?;
+    try testing.expect(std.mem.endsWith(u8, request.url, "/v1/native/commands"));
+    try testing.expectEqualStrings("/quit", request.body);
+}
+
 test "composer edit and submit dispatch through native markup" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

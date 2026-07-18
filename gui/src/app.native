@@ -12,10 +12,10 @@
         <separator />
 
         <column padding="12" gap="12" grow="1">
-          <button icon="plus" variant="primary" on-press="new_chat" label="Start New Task">New Task</button>
+          <button icon="plus" variant="primary" on-press="new_chat" label="Start New Agent Task">New Agent Task</button>
 
           <row height="28" cross="center">
-            <text grow="1" foreground="text_muted">Threads</text>
+            <text grow="1" foreground="text_muted">Agent tasks</text>
             <badge variant="secondary">{session_count}</badge>
           </row>
 
@@ -53,13 +53,13 @@
     <column grow="1" background="background">
       <row height="56" padding="16" gap="10" cross="center" window-drag="true">
         <column gap="1" grow="1">
-          <text>Task</text>
+          <text>Agent Workspace</text>
           <text foreground="text_muted">{backendLabel} · {modeLabel} · {modelLabel}</text>
         </column>
         <badge variant="secondary">{connectionLabel}</badge>
         <stack>
-          <button icon="plus" size="icon" variant="ghost" on-press="new_chat" label="Start New Task"></button>
-          <tooltip anchor="below">Start New Task</tooltip>
+          <button icon="plus" size="icon" variant="ghost" on-press="new_chat" label="Start New Agent Task"></button>
+          <tooltip anchor="below">Start New Agent Task</tooltip>
         </stack>
       </row>
       <separator />
@@ -91,7 +91,7 @@
             <column gap="14" main="center" cross="center" grow="1">
               <avatar>LL</avatar>
               <column gap="5" cross="center">
-                <text>New Task</text>
+                <text>Ready for an agent task</text>
                 <text foreground="text_muted">{workspaceLabel}</text>
               </column>
               <row gap="6">
@@ -217,7 +217,7 @@
     <panel width="332" padding="0">
       <column grow="1">
         <row height="56" padding="16" cross="center" window-drag="true">
-          <text grow="1">Inspector</text>
+          <text grow="1">Orchestrator</text>
           <badge variant="secondary">{tool_count}</badge>
         </row>
         <separator />
@@ -225,7 +225,7 @@
         <scroll grow="1" label="Run activity">
           <column padding="16" gap="18">
             <column gap="8">
-              <text foreground="text_muted">Mode</text>
+              <text foreground="text_muted">Agent mode</text>
               <button-group gap="4">
                 <button size="sm" variant="secondary" on-press="mode_build">Build</button>
                 <button size="sm" variant="secondary" on-press="mode_ask">Ask</button>
@@ -234,7 +234,7 @@
             </column>
 
             <column gap="8">
-              <text foreground="text_muted">Provider</text>
+              <text foreground="text_muted">Runtime</text>
               <panel padding="10">
                 <column gap="7">
                   <row gap="8" cross="center">
@@ -261,7 +261,7 @@
 
             <column gap="8">
               <row height="24" cross="center">
-                <text grow="1" foreground="text_muted">Models</text>
+                <text grow="1" foreground="text_muted">Model routing</text>
                 <button size="sm" variant="ghost" on-press="command_models">All</button>
               </row>
               <if test="{hasModels}">
@@ -328,7 +328,7 @@
 
             <column gap="8">
               <row height="24" cross="center">
-                <text grow="1" foreground="text_muted">Orchestration</text>
+                <text grow="1" foreground="text_muted">Task lanes</text>
                 <badge variant="secondary">{workspaceBranch}</badge>
               </row>
               <panel padding="12">
@@ -385,7 +385,7 @@
                         </column>
                       </accordion>
                     </if>
-                    <button size="sm" variant="secondary" on-press="command_worktree">Task Lanes</button>
+                    <button size="sm" variant="secondary" on-press="command_worktree">Manage Task Lanes</button>
                   </column>
                 </if>
                 <else>
@@ -401,7 +401,7 @@
             </column>
 
             <column gap="8">
-              <text foreground="text_muted">Review</text>
+              <text foreground="text_muted">Review and ship</text>
               <row gap="6">
                 <button grow="1" size="sm" variant="secondary" on-press="command_changes">Changes</button>
                 <button grow="1" size="sm" variant="secondary" on-press="command_diff">Diff</button>
@@ -456,7 +456,7 @@
             </column>
 
             <column gap="8">
-              <text foreground="text_muted">Actions</text>
+              <text foreground="text_muted">TUI commands</text>
               <row gap="6">
                 <button grow="1" size="sm" variant="ghost" on-press="command_usage">Usage</button>
                 <button grow="1" size="sm" variant="ghost" on-press="command_help">Help</button>
@@ -475,7 +475,10 @@
                 <button size="sm" variant="ghost" on-press="command_undo">Undo</button>
                 <button size="sm" variant="ghost" on-press="command_copy">Copy</button>
               </button-group>
-              <button size="sm" variant="ghost" on-press="command_sudo">Sudo Mode</button>
+              <row gap="6">
+                <button grow="1" size="sm" variant="ghost" on-press="command_sudo">Sudo Mode</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_quit">Quit</button>
+              </row>
             </column>
 
             <separator />

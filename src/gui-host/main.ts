@@ -40,6 +40,43 @@ import { GuiRuntime } from './runtime';
 import { createGuiHostServer } from './server';
 import { readWorkspaceStatus } from './workspace-status';
 
+export const GUI_HANDLED_COMMANDS = [
+  '/help',
+  '/clear',
+  '/sessions',
+  '/compact',
+  '/memory',
+  '/model',
+  '/models',
+  '/backend',
+  '/login',
+  '/benchmark',
+  '/benchmarks',
+  '/gateway',
+  '/usage',
+  '/analytics',
+  '/rate',
+  '/workspace',
+  '/repo',
+  '/worktree',
+  '/worktrees',
+  '/changes',
+  '/diff',
+  '/skills',
+  '/mcp',
+  '/tools',
+  '/subagents',
+  '/sudo',
+  '/permissions',
+  '/copy',
+  '/build',
+  '/plan',
+  '/ask',
+  '/undo',
+  '/paste-image',
+  '/quit',
+] as const;
+
 export interface GuiHostMainOptions {
   serverPath: string;
   workspace: string;
