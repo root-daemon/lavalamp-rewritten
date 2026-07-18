@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { delimiter, join } from 'node:path';
+import { spawn } from 'node:child_process';
 
 type GuiEnvironment = Record<string, string | undefined>;
 
@@ -31,32 +31,80 @@ export function resolveGuiBinary(
   return guiBinaryCandidates(repoRoot, env).find(exists) ?? null;
 }
 
+export function guiLaunchPath(repoRoot: string, env: GuiEnvironment): string {
+  const repoBin = join(repoRoot, 'bin');
+  const pathEntries = [env.PATH, process.env.PATH]
+    .flatMap((entry) => entry?.split(delimiter) ?? [])
+    .filter((entry) => entry.length > 0);
+  if (!pathEntries.includes(repoBin)) {
+    pathEntries.unshift(repoBin);
+  }
+  return pathEntries.join(delimiter);
+}
+
 export function launchGui(options: {
   repoRoot: string;
   workspace: string;
   env: GuiEnvironment;
-}): number {
+}): Promise<number> {
   const binary = resolveGuiBinary(options.repoRoot, options.env);
   if (!binary) {
     console.error(
       '[lavalamp] Native GUI not built. Run `bun run gui:build`, then retry `lavalamp gui`.',
     );
-    return 1;
+    return Promise.resolve(1);
   }
 
-  const result = spawnSync(binary, [], {
+  const child = spawn(binary, [], {
     cwd: options.workspace,
+    detached: process.platform !== 'win32',
     env: {
       ...process.env,
       ...options.env,
       LAVALAMP_WORKSPACE: options.workspace,
+      PATH: guiLaunchPath(options.repoRoot, options.env),
     },
-    stdio: 'inherit',
+    stdio: 'ignore',
   });
 
-  if (result.error) {
-    console.error(`[lavalamp] Failed to launch native GUI: ${result.error.message}`);
-    return 1;
-  }
-  return result.status ?? 0;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (code: number) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(code);
+    };
+    const onSignal = (signal: NodeJS.Signals) => {
+      if (child.pid !== undefined) {
+        try {
+          if (process.platform === 'win32') {
+            child.kill(signal);
+          } else {
+            process.kill(-child.pid, signal);
+          }
+        } catch {
+          child.kill(signal);
+        }
+      }
+      finish(signal === 'SIGINT' ? 130 : 143);
+    };
+    const cleanup = () => {
+      process.off('SIGINT', onSignal);
+      process.off('SIGTERM', onSignal);
+    };
+
+    process.once('SIGINT', onSignal);
+    process.once('SIGTERM', onSignal);
+
+    child.once('error', (error) => {
+      console.error(`[lavalamp] Failed to launch native GUI: ${error.message}`);
+      finish(1);
+    });
+    child.once('exit', (code, signal) => {
+      if (signal === 'SIGINT') finish(130);
+      else if (signal === 'SIGTERM') finish(143);
+      else finish(code ?? 0);
+    });
+  });
 }

@@ -80,25 +80,20 @@ if (!existsSync(serverPath)) {
 }
 
 if (subcommand === 'gui') {
-  process.exit(launchGui({ env, repoRoot, workspace: workspaceRoot }));
+  process.exit(await launchGui({ env, repoRoot, workspace: workspaceRoot }));
 }
 
 if (subcommand === 'gui-host') {
-  const guiBackend = config.backend;
-  assertBackendSupported(guiBackend);
-  const guiModel = guiBackend === 'codex'
+  const backend = resolveBackend({
+    configured: config.backend,
+    explicit: parseBackend(process.env.LAVALAMP_BACKEND),
+  });
+  const guiModel = backend === 'codex'
     ? config.codexModel || undefined
     : configuredFlueModel;
-  await preflightInteractiveAuth({
-    backend: guiBackend,
-    config,
-    env,
-    model: guiModel,
-    outputFormat: 'text',
-  });
   await runGuiHost({
     agentName: process.env.LAVALAMP_ASK === '1' ? 'explore' : 'build',
-    backend: guiBackend,
+    backend,
     model: guiModel,
     serverPath,
     workspace: workspaceRoot,

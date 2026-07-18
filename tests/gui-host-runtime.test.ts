@@ -87,58 +87,87 @@ class FakeProcess implements GuiProcess {
 
 describe('GUI runtime adapter', () => {
   test('normalizes prompt streaming, tools, terminal output, and result', async () => {
-    const process = new FakeProcess();
+    const originalShowLogs = process.env.LAVALAMP_GUI_SHOW_LOGS;
+    process.env.LAVALAMP_GUI_SHOW_LOGS = '1';
+    const guiProcess = new FakeProcess();
     const store = new GuiEventStore();
-    const runtime = new GuiRuntime({ process, store });
-    await runtime.start({ model: 'model-a', workspace: '/repo' });
+    const runtime = new GuiRuntime({ process: guiProcess, store });
+    try {
+      await runtime.start({ model: 'model-a', workspace: '/repo' });
 
-    runtime.submitPrompt('Fix tests', 'session-1');
-    process.callbacks?.onEvent?.({ type: 'text_delta', delta: 'Done' });
-    process.callbacks?.onEvent?.({
-      args: { cmd: 'bun test' },
-      toolCallId: 'tool-1',
-      toolName: 'bash',
-      type: 'tool_start',
-    });
-    process.onBashStream?.('3 pass\n', 'stdout');
-    process.callbacks?.onEvent?.({
-      durationMs: 25,
-      isError: false,
-      result: 'ok',
-      toolCallId: 'tool-1',
-      toolName: 'bash',
-      type: 'tool',
-    });
-    process.callbacks?.onResult?.({
-      backend: 'flue',
-      model: { id: 'model-a', provider: 'cloudflare' },
-      text: 'Done',
-      usage: {
-        cacheRead: 2,
-        cacheWrite: 0,
-        cost: { input: 0.01, output: 0.02, total: 0.03 },
-        input: 8,
-        output: 4,
-        totalTokens: 14,
-      },
-    });
+      runtime.submitPrompt('Fix tests', 'session-1');
+      guiProcess.callbacks?.onEvent?.({ type: 'text_delta', delta: 'Done' });
+      guiProcess.callbacks?.onEvent?.({
+        args: { cmd: 'bun test' },
+        toolCallId: 'tool-1',
+        toolName: 'bash',
+        type: 'tool_start',
+      });
+      guiProcess.onBashStream?.('3 pass\n', 'stdout');
+      guiProcess.callbacks?.onEvent?.({
+        durationMs: 25,
+        isError: false,
+        result: 'ok',
+        toolCallId: 'tool-1',
+        toolName: 'bash',
+        type: 'tool',
+      });
+      guiProcess.callbacks?.onResult?.({
+        backend: 'flue',
+        model: { id: 'model-a', provider: 'cloudflare' },
+        text: 'Done',
+        usage: {
+          cacheRead: 2,
+          cacheWrite: 0,
+          cost: { input: 0.01, output: 0.02, total: 0.03 },
+          input: 8,
+          output: 4,
+          totalTokens: 14,
+        },
+      });
 
-    expect(store.after(0).map((event) => event.type)).toEqual([
-      'host.ready',
-      'user.message',
-      'turn.started',
-      'text.delta',
-      'tool.started',
-      'terminal.output',
-      'tool.completed',
-      'turn.completed',
-    ]);
-    expect(store.snapshot()).toMatchObject({
-      assistantText: 'Done',
-      processing: false,
-      terminalOutput: '3 pass\n',
-      usage: { cost: 0.03, totalTokens: 14 },
-    });
+      expect(store.after(0).map((event) => event.type)).toEqual([
+        'host.ready',
+        'user.message',
+        'turn.started',
+        'text.delta',
+        'tool.started',
+        'terminal.output',
+        'tool.completed',
+        'turn.completed',
+      ]);
+      expect(store.snapshot()).toMatchObject({
+        assistantText: 'Done',
+        processing: false,
+        terminalOutput: '3 pass\n',
+        usage: { cost: 0.03, totalTokens: 14 },
+      });
+    } finally {
+      if (originalShowLogs === undefined) {
+        delete process.env.LAVALAMP_GUI_SHOW_LOGS;
+      } else {
+        process.env.LAVALAMP_GUI_SHOW_LOGS = originalShowLogs;
+      }
+    }
+  });
+
+  test('suppresses terminal stream in GUI snapshots by default', async () => {
+    const originalShowLogs = process.env.LAVALAMP_GUI_SHOW_LOGS;
+    delete process.env.LAVALAMP_GUI_SHOW_LOGS;
+    const guiProcess = new FakeProcess();
+    const store = new GuiEventStore();
+    const runtime = new GuiRuntime({ process: guiProcess, store });
+    try {
+      await runtime.start({ workspace: '/repo' });
+      guiProcess.onBashStream?.('hidden\n', 'stdout');
+      expect(store.snapshot().terminalOutput).toBe('');
+    } finally {
+      if (originalShowLogs === undefined) {
+        delete process.env.LAVALAMP_GUI_SHOW_LOGS;
+      } else {
+        process.env.LAVALAMP_GUI_SHOW_LOGS = originalShowLogs;
+      }
+    }
   });
 
   test('routes permission and question responses through active process', async () => {

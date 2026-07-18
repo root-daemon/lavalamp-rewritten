@@ -1,21 +1,21 @@
 <column background="background">
   <row grow="1">
-    <panel width="236" padding="0">
+    <panel width="284" padding="0">
       <column grow="1">
         <row height="56" padding="14" gap="10" cross="center" window-drag="true">
           <icon name="circle-dot" size="sm" />
           <column gap="1" grow="1">
             <text>Lavalamp</text>
-            <text foreground="text_muted">Native Workspace</text>
+            <text foreground="text_muted">{workspaceLabel}</text>
           </column>
         </row>
         <separator />
 
         <column padding="12" gap="12" grow="1">
-          <button icon="plus" variant="primary" on-press="new_chat" label="Start New Chat">New Chat</button>
+          <button icon="plus" variant="primary" on-press="new_chat" label="Start New Task">New Task</button>
 
           <row height="28" cross="center">
-            <text grow="1" foreground="text_muted">Recent Sessions</text>
+            <text grow="1" foreground="text_muted">Tasks</text>
             <badge variant="secondary">{session_count}</badge>
           </row>
 
@@ -30,7 +30,7 @@
               </if>
               <else>
                 <panel padding="10">
-                  <text wrap="true" foreground="text_muted">Sessions appear after first completed turn.</text>
+                  <text wrap="true" foreground="text_muted">No saved tasks yet.</text>
                 </panel>
               </else>
             </column>
@@ -43,7 +43,7 @@
             <icon name="folder" size="sm" />
             <text grow="1" wrap="true">{workspaceLabel}</text>
           </row>
-          <text foreground="text_muted">{modelLabel}</text>
+          <text foreground="text_muted">{backendLabel} · {modeLabel}</text>
         </column>
       </column>
     </panel>
@@ -53,13 +53,13 @@
     <column grow="1" background="background">
       <row height="56" padding="16" gap="10" cross="center" window-drag="true">
         <column gap="1" grow="1">
-          <text>Agent Session</text>
-          <text foreground="text_muted">{providerLabel} · {modelLabel}</text>
+          <text>Task</text>
+          <text foreground="text_muted">{backendLabel} · {modeLabel} · {modelLabel}</text>
         </column>
         <badge variant="secondary">{connectionLabel}</badge>
         <stack>
-          <button icon="plus" size="icon" variant="ghost" on-press="new_chat" label="Start New Chat"></button>
-          <tooltip anchor="below">Start New Chat</tooltip>
+          <button icon="plus" size="icon" variant="ghost" on-press="new_chat" label="Start New Task"></button>
+          <tooltip anchor="below">Start New Task</tooltip>
         </stack>
       </row>
       <separator />
@@ -70,17 +70,34 @@
             <alert variant="destructive">{errorText}</alert>
           </if>
 
+          <if test="{hasCommandResult}">
+            <panel padding="14">
+              <column gap="10">
+                <row gap="8" cross="center">
+                  <icon name="terminal" size="sm" />
+                  <text>{commandTitle}</text>
+                </row>
+                <separator />
+                <column gap="5">
+                  <for each="commandRows" key="id" as="row">
+                    <text wrap="true" foreground="text_muted">{row.text}</text>
+                  </for>
+                </column>
+              </column>
+            </panel>
+          </if>
+
           <if test="{emptyState}">
             <column gap="14" main="center" cross="center" grow="1">
               <avatar>LL</avatar>
               <column gap="5" cross="center">
-                <text>Lavalamp Ready</text>
-                <text foreground="text_muted">Inspect code, run tools, or ship a change from this workspace.</text>
+                <text>New Task</text>
+                <text foreground="text_muted">{workspaceLabel}</text>
               </column>
               <row gap="6">
-                <badge variant="secondary">Native</badge>
-                <badge variant="secondary">Full Runtime</badge>
-                <badge variant="secondary">Interactive Permissions</badge>
+                <badge variant="secondary">{backendLabel}</badge>
+                <badge variant="secondary">{modeLabel}</badge>
+                <badge variant="secondary">{connectionLabel}</badge>
               </row>
             </column>
           </if>
@@ -154,9 +171,10 @@
 
       <column padding="16" gap="8">
         <input-group label="Message Composer" height="124">
-          <textarea text="{draftText}" placeholder="Ask Lavalamp to inspect, build, or fix…" on-input="draft_edit" on-submit="send" label="Message" />
+          <textarea text="{draftText}" placeholder="Describe the task…" on-input="draft_edit" on-submit="send" label="Message" />
           <input-group-actions gap="6">
-            <badge variant="secondary">{modelLabel}</badge>
+            <badge variant="secondary">{backendLabel}</badge>
+            <badge variant="secondary">{modeLabel}</badge>
             <spacer grow="1" />
             <if test="{processing}">
               <button icon="x" variant="secondary" size="sm" on-press="cancel" label="Stop Current Turn">Stop</button>
@@ -166,7 +184,7 @@
             </else>
           </input-group-actions>
         </input-group>
-        <text foreground="text_muted">Enter sends · Tool calls stay permission-gated</text>
+        <text foreground="text_muted">{modelLabel} · {usageLabel}</text>
       </column>
     </column>
 
@@ -175,20 +193,68 @@
     <panel width="296" padding="0">
       <column grow="1">
         <row height="56" padding="16" cross="center" window-drag="true">
-          <text grow="1">Run Activity</text>
+          <text grow="1">Inspector</text>
           <badge variant="secondary">{tool_count}</badge>
         </row>
         <separator />
 
         <scroll grow="1" label="Run activity">
           <column padding="16" gap="18">
+            <column gap="8">
+              <text foreground="text_muted">Mode</text>
+              <button-group gap="4">
+                <button size="sm" variant="secondary" on-press="mode_build">Build</button>
+                <button size="sm" variant="secondary" on-press="mode_ask">Ask</button>
+                <button size="sm" variant="secondary" on-press="mode_plan">Plan</button>
+              </button-group>
+            </column>
+
+            <column gap="8">
+              <text foreground="text_muted">Provider</text>
+              <button-group gap="4">
+                <button size="sm" variant="ghost" on-press="backend_flue">Flue</button>
+                <button size="sm" variant="ghost" on-press="backend_codex">Codex</button>
+              </button-group>
+            </column>
+
+            <column gap="8">
+              <text foreground="text_muted">Review</text>
+              <row gap="6">
+                <button grow="1" size="sm" variant="ghost" on-press="command_models">Models</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_sessions">Sessions</button>
+              </row>
+              <row gap="6">
+                <button grow="1" size="sm" variant="ghost" on-press="command_permissions">Permissions</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_tools">Tools</button>
+              </row>
+              <row gap="6">
+                <button grow="1" size="sm" variant="ghost" on-press="command_analytics">Analytics</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_benchmarks">Benchmarks</button>
+              </row>
+            </column>
+
+            <column gap="8">
+              <text foreground="text_muted">Actions</text>
+              <row gap="6">
+                <button grow="1" size="sm" variant="ghost" on-press="command_usage">Usage</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_help">Help</button>
+              </row>
+              <button-group gap="4">
+                <button size="sm" variant="ghost" on-press="command_compact">Compact</button>
+                <button size="sm" variant="ghost" on-press="command_undo">Undo</button>
+                <button size="sm" variant="ghost" on-press="command_copy">Copy</button>
+              </button-group>
+            </column>
+
+            <separator />
+
             <column gap="7">
-              <text foreground="text_muted">Runtime</text>
+              <text foreground="text_muted">Current Run</text>
               <row gap="8" cross="center">
                 <icon name="circle-dot" size="sm" />
                 <column gap="2" grow="1">
                   <text>{modelLabel}</text>
-                  <text foreground="text_muted">{providerLabel}</text>
+                  <text foreground="text_muted">{providerLabel} · {backendLabel} · {modeLabel}</text>
                 </column>
               </row>
             </column>
@@ -231,7 +297,7 @@
             <separator />
 
             <column gap="8">
-              <text foreground="text_muted">Tool Activity</text>
+              <text foreground="text_muted">Activity</text>
               <if test="{hasTools}">
                 <timeline gap="7" label="Tool activity timeline">
                   <for each="toolItems" key="id" as="tool">
@@ -240,7 +306,7 @@
                 </timeline>
               </if>
               <else>
-                <text wrap="true" foreground="text_muted">Tool calls appear here while agent works.</text>
+                <text wrap="true" foreground="text_muted">No activity yet.</text>
               </else>
             </column>
 
