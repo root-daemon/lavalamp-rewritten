@@ -224,7 +224,7 @@ if [ "$PRINT_MODE" = true ]; then
     EXTRA_ARGS+=(--yes)
   fi
 
-  cd "$REPO_DIR" && PORT=48392 bun src/run.ts "${EXTRA_ARGS[@]}"
+  cd "$REPO_DIR" && PORT="${PORT:-48392}" bun src/run.ts "${EXTRA_ARGS[@]}"
 elif [ "$SIMPLE_MODE" = true ]; then
   EXTRA_ARGS=(--simple --quiet)
   EXTRA_ARGS+=(--output-format "$OUTPUT_FORMAT")
@@ -232,7 +232,7 @@ elif [ "$SIMPLE_MODE" = true ]; then
     EXTRA_ARGS+=(--yes)
   fi
 
-  cd "$REPO_DIR" && PORT=48392 bun src/run.ts "${EXTRA_ARGS[@]}"
+  cd "$REPO_DIR" && PORT="${PORT:-48392}" bun src/run.ts "${EXTRA_ARGS[@]}"
 elif [ "$REPL_MODE" = true ]; then
   EXTRA_ARGS=(--repl)
   EXTRA_ARGS+=(--output-format "$OUTPUT_FORMAT")
@@ -243,7 +243,7 @@ elif [ "$REPL_MODE" = true ]; then
     EXTRA_ARGS+=(--yes)
   fi
 
-  cd "$REPO_DIR" && PORT=48392 bun src/run.ts "${EXTRA_ARGS[@]}"
+  cd "$REPO_DIR" && PORT="${PORT:-48392}" bun src/run.ts "${EXTRA_ARGS[@]}"
 else
   EXTRA_ARGS=()
   if [ "$RESUME_SESSION" = true ]; then
@@ -253,5 +253,5 @@ else
     fi
   fi
 
-  cd "$REPO_DIR" && PORT=48392 bun src/run.ts "${EXTRA_ARGS[@]}"
+  cd "$REPO_DIR" && PORT="${PORT:-48392}" bun src/run.ts "${EXTRA_ARGS[@]}"
 fi
