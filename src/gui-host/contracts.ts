@@ -105,6 +105,27 @@ export interface GuiSnapshot {
   tools: GuiToolSnapshot[];
 }
 
+export interface GuiWorkspaceChangeSnapshot {
+  path: string;
+  status: string;
+  staged: boolean;
+  unstaged: boolean;
+  untracked: boolean;
+}
+
+export interface GuiWorkspaceStatusSnapshot {
+  git: boolean;
+  branch: string;
+  upstream?: string;
+  ahead: number;
+  behind: number;
+  clean: boolean;
+  summary: string;
+  changes: GuiWorkspaceChangeSnapshot[];
+  diffStat: string[];
+  error?: string;
+}
+
 export interface GuiMessageSnapshot {
   role: 'user' | 'assistant';
   content: string;

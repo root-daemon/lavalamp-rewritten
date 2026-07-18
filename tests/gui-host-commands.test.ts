@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GuiEventStore } from '../src/gui-host/event-store';
@@ -139,5 +140,24 @@ describe('GUI host commands', () => {
 
     expect(pasted.insertText).toBe('[Image 1]');
     expect(pasted.rows).toEqual(['Attached [Image 1]', '/tmp/image.png']);
+  });
+
+  test('renders read-only git changes and diff output for GUI review', async () => {
+    const { runtime, workspace } = fixture();
+    spawnSync('git', ['init'], { cwd: workspace });
+    writeFileSync(join(workspace, 'tracked.txt'), 'old\n');
+    spawnSync('git', ['add', 'tracked.txt'], { cwd: workspace });
+    writeFileSync(join(workspace, 'tracked.txt'), 'new\n');
+    writeFileSync(join(workspace, 'untracked.txt'), 'new file\n');
+
+    const changes = await runGuiCommand(runtime, workspace, '/server.mjs', '/changes');
+    expect(changes.rows.join('\n')).toContain('changed files: 2');
+    expect(changes.rows.join('\n')).toContain('tracked.txt');
+    expect(changes.rows.join('\n')).toContain('untracked.txt');
+    expect(changes.rows.join('\n')).toContain('diff stat:');
+
+    const diff = await runGuiCommand(runtime, workspace, '/server.mjs', '/diff tracked.txt');
+    expect(diff.rows.join('\n')).toContain('-old');
+    expect(diff.rows.join('\n')).toContain('+new');
   });
 });

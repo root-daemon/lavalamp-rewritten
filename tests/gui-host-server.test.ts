@@ -189,6 +189,11 @@ describe('GUI host server', () => {
         models: [{ id: 'model-a' }],
         sessions: [{ sessionId: 'session-a' }],
         snapshot: { processing: true },
+        workspaceStatus: {
+          branch: 'not a git repository',
+          git: false,
+          summary: 'Git unavailable',
+        },
       },
     });
   });

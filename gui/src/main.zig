@@ -47,6 +47,8 @@ const max_tools = 24;
 const max_sessions = 16;
 const max_models = 24;
 const max_command_rows = 48;
+const max_workspace_changes = 16;
+const max_diff_stats = 10;
 
 const Role = enum { user, assistant };
 
@@ -142,17 +144,44 @@ pub const CommandRow = struct {
     }
 };
 
+pub const WorkspaceChange = struct {
+    id: u64 = 0,
+    status_storage: [16]u8 = undefined,
+    status_len: usize = 0,
+    path_storage: [320]u8 = undefined,
+    path_len: usize = 0,
+
+    pub fn status(self: *const WorkspaceChange) []const u8 {
+        return self.status_storage[0..self.status_len];
+    }
+
+    pub fn path(self: *const WorkspaceChange) []const u8 {
+        return self.path_storage[0..self.path_len];
+    }
+};
+
+pub const DiffStat = struct {
+    id: u64 = 0,
+    storage: [512]u8 = undefined,
+    len: usize = 0,
+
+    pub fn text(self: *const DiffStat) []const u8 {
+        return self.storage[0..self.len];
+    }
+};
+
 pub const Model = struct {
     pub const view_unbound = .{
         "connected", "cursor", "queue_count", "host_port", "auth_token_storage", "auth_token_len",
         "draft", "assistant_storage", "assistant_len", "thinking_storage", "thinking_len",
         "terminal_storage", "terminal_len", "error_storage", "error_len",
         "workspace_storage", "workspace_len", "model_storage", "model_len",
+        "workspace_branch_storage", "workspace_branch_len", "workspace_summary_storage", "workspace_summary_len", "workspace_git", "workspace_clean",
         "provider_storage", "provider_len", "backend_storage", "backend_len", "mode_storage", "mode_len", "permission_id_storage", "permission_id_len",
         "permission_tool_storage", "permission_tool_len", "pending_question", "question_id_storage", "question_id_len", "question_text_storage", "question_text_len",
         "question_body_storage", "messages", "message_count",
         "tools", "tool_count", "sessions", "session_count", "models", "model_count", "selected_session_key", "command_title_storage", "command_title_len",
-        "command_rows", "command_row_count", "total_tokens", "total_cost", "assistantText", "authToken",
+        "command_rows", "command_row_count", "workspace_changes", "workspace_change_count", "diff_stats", "diff_stat_count", "total_tokens", "total_cost", "assistantText", "authToken",
         "permissionId", "hasMessages",
     };
 
@@ -174,6 +203,12 @@ pub const Model = struct {
     error_len: usize = 0,
     workspace_storage: [1024]u8 = undefined,
     workspace_len: usize = 0,
+    workspace_branch_storage: [160]u8 = undefined,
+    workspace_branch_len: usize = 0,
+    workspace_summary_storage: [256]u8 = undefined,
+    workspace_summary_len: usize = 0,
+    workspace_git: bool = false,
+    workspace_clean: bool = true,
     model_storage: [256]u8 = undefined,
     model_len: usize = 0,
     provider_storage: [96]u8 = undefined,
@@ -206,6 +241,10 @@ pub const Model = struct {
     command_title_len: usize = 0,
     command_rows: [max_command_rows]CommandRow = [_]CommandRow{.{}} ** max_command_rows,
     command_row_count: usize = 0,
+    workspace_changes: [max_workspace_changes]WorkspaceChange = [_]WorkspaceChange{.{}} ** max_workspace_changes,
+    workspace_change_count: usize = 0,
+    diff_stats: [max_diff_stats]DiffStat = [_]DiffStat{.{}} ** max_diff_stats,
+    diff_stat_count: usize = 0,
     total_tokens: u64 = 0,
     total_cost: f64 = 0,
 
@@ -227,6 +266,14 @@ pub const Model = struct {
     pub fn workspaceLabel(self: *const Model) []const u8 {
         if (self.workspace_len == 0) return "Workspace unavailable";
         return self.workspace_storage[0..self.workspace_len];
+    }
+    pub fn workspaceBranch(self: *const Model) []const u8 {
+        if (self.workspace_branch_len == 0) return "No branch";
+        return self.workspace_branch_storage[0..self.workspace_branch_len];
+    }
+    pub fn workspaceSummary(self: *const Model) []const u8 {
+        if (self.workspace_summary_len == 0) return "Workspace status unavailable";
+        return self.workspace_summary_storage[0..self.workspace_summary_len];
     }
     pub fn modelLabel(self: *const Model) []const u8 {
         if (self.model_len == 0) return "Default model";
@@ -265,6 +312,12 @@ pub const Model = struct {
     pub fn commandRows(self: *const Model) []const CommandRow {
         return self.command_rows[0..self.command_row_count];
     }
+    pub fn workspaceChanges(self: *const Model) []const WorkspaceChange {
+        return self.workspace_changes[0..self.workspace_change_count];
+    }
+    pub fn diffStats(self: *const Model) []const DiffStat {
+        return self.diff_stats[0..self.diff_stat_count];
+    }
     pub fn messageItems(self: *const Model) []const Message {
         return self.messages[0..self.message_count];
     }
@@ -300,6 +353,12 @@ pub const Model = struct {
     }
     pub fn hasCommandResult(self: *const Model) bool {
         return self.command_row_count > 0;
+    }
+    pub fn hasWorkspaceChanges(self: *const Model) bool {
+        return self.workspace_change_count > 0;
+    }
+    pub fn hasDiffStats(self: *const Model) bool {
+        return self.diff_stat_count > 0;
     }
     pub fn usageLabel(self: *const Model, arena: std.mem.Allocator) []const u8 {
         return std.fmt.allocPrint(arena, "{d} tokens · ${d:.4}", .{ self.total_tokens, self.total_cost }) catch "Usage unavailable";
@@ -361,6 +420,8 @@ pub const Msg = union(enum) {
     command_rate_helpful,
     command_rate_unhelpful,
     command_workspace,
+    command_changes,
+    command_diff,
     command_skills,
     command_sudo,
     command_analytics,
@@ -453,6 +514,8 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .command_rate_helpful => sendCommand(model, fx, "/rate helpful", false),
         .command_rate_unhelpful => sendCommand(model, fx, "/rate unhelpful", false),
         .command_workspace => sendCommand(model, fx, "/workspace", false),
+        .command_changes => sendCommand(model, fx, "/changes", false),
+        .command_diff => sendCommand(model, fx, "/diff", false),
         .command_skills => sendCommand(model, fx, "/skills", false),
         .command_sudo => sendCommand(model, fx, "/sudo", false),
         .command_analytics => sendCommand(model, fx, "/analytics", false),
@@ -837,10 +900,20 @@ const SnapshotPayload = struct {
 };
 const SessionPayload = struct { sessionId: []const u8 = "", prompt: []const u8 = "" };
 const ModelPayload = struct { id: []const u8 = "", displayName: []const u8 = "" };
+const WorkspaceChangePayload = struct { path: []const u8 = "", status: []const u8 = "" };
+const WorkspaceStatusPayload = struct {
+    git: bool = false,
+    branch: []const u8 = "",
+    clean: bool = true,
+    summary: []const u8 = "",
+    changes: []const WorkspaceChangePayload = &.{},
+    diffStat: []const []const u8 = &.{},
+};
 const NativeData = struct {
     snapshot: SnapshotPayload = .{},
     sessions: []const SessionPayload = &.{},
     models: []const ModelPayload = &.{},
+    workspaceStatus: WorkspaceStatusPayload = .{},
 };
 const NativeEnvelope = struct { ok: bool = false, data: ?NativeData = null };
 const SessionData = struct {
@@ -952,6 +1025,25 @@ pub fn applySnapshotJson(model: *Model, body: []const u8) bool {
         target.id_len = copyText(&target.id_storage, runtime_model.id);
         target.name_len = copyText(&target.name_storage, runtime_model.displayName);
         target.selected = model.model_len > 0 and std.mem.eql(u8, target.id(), model.modelLabel());
+    }
+
+    const workspace_status = data.workspaceStatus;
+    model.workspace_git = workspace_status.git;
+    model.workspace_clean = workspace_status.clean;
+    model.workspace_branch_len = copyText(&model.workspace_branch_storage, workspace_status.branch);
+    model.workspace_summary_len = copyText(&model.workspace_summary_storage, workspace_status.summary);
+    model.workspace_change_count = @min(workspace_status.changes.len, max_workspace_changes);
+    for (workspace_status.changes[0..model.workspace_change_count], 0..) |change, index| {
+        const target = &model.workspace_changes[index];
+        target.id = std.hash.Wyhash.hash(0, change.path);
+        target.status_len = copyText(&target.status_storage, change.status);
+        target.path_len = copyText(&target.path_storage, change.path);
+    }
+    model.diff_stat_count = @min(workspace_status.diffStat.len, max_diff_stats);
+    for (workspace_status.diffStat[0..model.diff_stat_count], 0..) |row, index| {
+        const target = &model.diff_stats[index];
+        target.id = index + 1;
+        target.len = copyText(&target.storage, row);
     }
 
     if (snapshot.pendingPermission) |permission| {

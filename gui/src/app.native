@@ -269,7 +269,52 @@
             </column>
 
             <column gap="8">
+              <row height="24" cross="center">
+                <text grow="1" foreground="text_muted">Changes</text>
+                <badge variant="secondary">{workspaceBranch}</badge>
+              </row>
+              <panel padding="10">
+                <column gap="8">
+                  <row gap="8" cross="center">
+                    <icon name="git-branch" size="sm" />
+                    <column gap="2" grow="1">
+                      <text wrap="true">{workspaceSummary}</text>
+                      <text wrap="true" foreground="text_muted">{workspaceLabel}</text>
+                    </column>
+                  </row>
+                  <if test="{hasWorkspaceChanges}">
+                    <separator />
+                    <column gap="5">
+                      <for each="workspaceChanges" key="id" as="change">
+                        <row gap="8" cross="center">
+                          <badge variant="secondary">{change.status}</badge>
+                          <text grow="1" wrap="true">{change.path}</text>
+                        </row>
+                      </for>
+                    </column>
+                  </if>
+                  <else>
+                    <text foreground="text_muted">No file changes.</text>
+                  </else>
+                  <if test="{hasDiffStats}">
+                    <accordion text="Diff Stat">
+                      <column gap="4">
+                        <for each="diffStats" key="id" as="stat">
+                          <text wrap="true" foreground="text_muted">{stat.text}</text>
+                        </for>
+                      </column>
+                    </accordion>
+                  </if>
+                </column>
+              </panel>
+            </column>
+
+            <column gap="8">
               <text foreground="text_muted">Review</text>
+              <row gap="6">
+                <button grow="1" size="sm" variant="secondary" on-press="command_changes">Changes</button>
+                <button grow="1" size="sm" variant="secondary" on-press="command_diff">Diff</button>
+              </row>
               <row gap="6">
                 <button grow="1" size="sm" variant="ghost" on-press="command_sessions">Sessions</button>
                 <button grow="1" size="sm" variant="ghost" on-press="command_skills">Skills</button>

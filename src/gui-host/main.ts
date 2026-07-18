@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { login as cloudflareLogin } from '../auth/login';
@@ -30,6 +31,7 @@ import {
 import type { GuiCommandResult } from './contracts';
 import { GuiRuntime } from './runtime';
 import { createGuiHostServer } from './server';
+import { readWorkspaceStatus } from './workspace-status';
 
 export interface GuiHostMainOptions {
   serverPath: string;
@@ -131,6 +133,10 @@ export async function runGuiCommand(
           '',
           'Keys:',
           ...HELP_KEYS.map(([key, desc]) => `${key.padEnd(14)} ${desc}`),
+          '',
+          'GUI:',
+          '/changes       Show git branch, changed files, and diff stat',
+          '/diff [path]   Show working tree diff',
         ],
       };
     case '/clear':
@@ -243,7 +249,11 @@ export async function runGuiCommand(
     case '/rate':
       return rateCurrentRun(runtime, arg);
     case '/workspace':
-      return { title: '/workspace', rows: [`workspace: ${workspace}`] };
+      return readWorkspaceSummary(workspace);
+    case '/changes':
+      return readGitChanges(workspace);
+    case '/diff':
+      return readGitDiff(workspace, arg);
     case '/skills': {
       const skills = discoverSkills(workspace);
       return {
@@ -335,6 +345,99 @@ export async function runGuiCommand(
     default:
       return { title: cmd || '/command', rows: [`unknown command: ${cmd}`] };
   }
+}
+
+function runGit(
+  workspace: string,
+  args: string[],
+): { stdout: string; stderr: string; status: number | null; error?: Error } {
+  const result = spawnSync('git', args, {
+    cwd: workspace,
+    encoding: 'utf8',
+    maxBuffer: 512 * 1024,
+  });
+  return {
+    error: result.error,
+    status: result.status,
+    stderr: result.stderr ?? '',
+    stdout: result.stdout ?? '',
+  };
+}
+
+function readGitChanges(workspace: string): GuiCommandResult {
+  const status = readWorkspaceStatus(workspace);
+  if (!status.git) return { title: '/changes', rows: ['No git repository found.'] };
+
+  return {
+    title: '/changes',
+    rows: [
+      `branch: ${status.branch}${status.upstream === undefined ? '' : ` -> ${status.upstream}`}`,
+      `changed files: ${status.changes.length}`,
+      ...(status.changes.length === 0
+        ? ['Working tree clean.']
+        : status.changes.map((change) => `${change.status.padEnd(2)} ${change.path}`)),
+      ...(status.diffStat.length > 0 ? ['', 'diff stat:', ...status.diffStat] : []),
+    ],
+  };
+}
+
+function readGitDiff(workspace: string, arg: string): GuiCommandResult {
+  const repo = runGit(workspace, ['rev-parse', '--show-toplevel']);
+  if (repo.status !== 0) {
+    return { title: '/diff', rows: ['No git repository found.'] };
+  }
+  const pathArgs = arg.length > 0 ? ['--', arg] : ['--'];
+  const working = runGit(workspace, ['diff', ...pathArgs]);
+  if (working.status !== 0) {
+    return { title: '/diff', rows: [`git diff failed: ${firstGitError(working)}`] };
+  }
+  const cached = working.stdout.trim().length > 0
+    ? { stdout: '', status: 0, stderr: '' }
+    : runGit(workspace, ['diff', '--cached', ...pathArgs]);
+  if (cached.status !== 0) {
+    return { title: '/diff', rows: [`git diff --cached failed: ${firstGitError(cached)}`] };
+  }
+  const diff = working.stdout.trim().length > 0 ? working.stdout : cached.stdout;
+  if (diff.trim().length === 0) {
+    return {
+      title: arg.length > 0 ? `/diff ${arg}` : '/diff',
+      rows: ['No working tree diff.'],
+    };
+  }
+  const rows = diff.trimEnd().split('\n');
+  const limit = 220;
+  return {
+    title: arg.length > 0 ? `/diff ${arg}` : '/diff',
+    rows: rows.length > limit
+      ? [...rows.slice(0, limit), `… truncated ${rows.length - limit} lines`]
+      : rows,
+  };
+}
+
+function firstGitError(result: { error?: Error; stderr: string; status: number | null }): string {
+  if (result.error !== undefined) return result.error.message;
+  const stderr = result.stderr.trim();
+  return stderr.length > 0 ? (stderr.split('\n')[0] ?? stderr) : `exit ${result.status ?? 'unknown'}`;
+}
+
+function readWorkspaceSummary(workspace: string): GuiCommandResult {
+  const status = readWorkspaceStatus(workspace);
+  return {
+    title: '/workspace',
+    rows: [
+      `workspace: ${workspace}`,
+      `branch: ${status.branch}${status.upstream === undefined ? '' : ` -> ${status.upstream}`}`,
+      `status: ${status.summary}`,
+      '',
+      'changes:',
+      ...(status.changes.length === 0
+        ? ['No file changes.']
+        : status.changes.map((change) => `${change.status.padEnd(2)} ${change.path}`)),
+      '',
+      'diff stat:',
+      ...(status.diffStat.length === 0 ? ['No diff stat.'] : status.diffStat),
+    ],
+  };
 }
 
 function readProjectMemory(workspace: string): GuiCommandResult {
