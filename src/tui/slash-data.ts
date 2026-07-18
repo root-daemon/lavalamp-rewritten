@@ -17,7 +17,7 @@ export const HELP_COMMANDS: [string, string][] = [
   ['/skills', 'List skills'],
   ['/mcp', 'List MCP servers'],
   ['/tools', 'List registered tools'],
-  ['/subagents', 'List subagents'],
+  ['/subagents [id]', 'List or inspect subagents'],
   ['/sudo', 'Dangerously allow every tool'],
   ['/permissions', 'Show permission rules'],
   ['/plan', 'Toggle plan mode'],

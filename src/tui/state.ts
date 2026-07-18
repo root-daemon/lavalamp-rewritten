@@ -1,3 +1,5 @@
+import type { RuntimeSubagent } from '../runtime/types';
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -22,7 +24,7 @@ export interface Task {
   status: 'pending' | 'in_progress' | 'completed' | 'skipped';
 }
 
-export interface SubAgent {
+export interface FlueSubAgent {
   id: string;
   query: string;
   status: 'running' | 'done' | 'failed' | 'timed_out' | 'killed';
@@ -50,7 +52,7 @@ export interface AppState {
   cwd: string;
   model?: string;
   tasks: Task[];
-  subAgents: SubAgent[];
+  subAgents: RuntimeSubagent[];
   usageTotals: {
     input: number;
     output: number;

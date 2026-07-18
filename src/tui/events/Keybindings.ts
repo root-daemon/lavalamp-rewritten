@@ -6,7 +6,6 @@ import type { ConfirmBoxManager } from '../components/ConfirmBox';
 import type { ResultPanelManager } from '../components/ResultPanel';
 import type { CompletionManager } from '../components/CompletionManager';
 import type { SubPanelManager } from '../components/QueueSubPanel';
-import type { SubAgentManager } from '../subs';
 import { COLORS } from '../theme';
 import { copyTextToClipboard } from '../../storage/clipboard';
 
@@ -19,7 +18,7 @@ export interface KeybindingsContext {
   resultPanel: ResultPanelManager;
   completion: CompletionManager;
   subBox: SubPanelManager;
-  subManager: SubAgentManager;
+  stopSubagent: (id: string) => void;
   viewerOverlay: { visible: boolean };
 
   // Callbacks for controller actions
@@ -44,7 +43,7 @@ export function handleKeyPress(key: KeyEvent, ctx: KeybindingsContext): void {
     resultPanel,
     completion,
     subBox,
-    subManager,
+    stopSubagent,
     viewerOverlay,
     handleSubmit,
     togglePlanMode,
@@ -180,7 +179,7 @@ export function handleKeyPress(key: KeyEvent, ctx: KeybindingsContext): void {
   ) {
     const first = store.subAgents.find((sub) => sub.status === 'running');
     if (first) {
-      subManager.kill(first.id);
+      stopSubagent(first.id);
     }
     key.stopPropagation();
     return;

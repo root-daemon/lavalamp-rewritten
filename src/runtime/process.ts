@@ -55,6 +55,7 @@ export interface RuntimeProcess {
   inspectSubagent(id: string): Promise<RuntimeSubagentInspection>;
   stopSubagent(id: string): Promise<void>;
   deploySubagents(queries: string[]): Promise<void>;
+  clearSubagents(): Promise<void>;
   setSubagentAnalytics?(
     analytics: AnalyticsRecorder,
     parentTurn?: () => string | undefined,
@@ -162,6 +163,9 @@ class FlueRuntimeProcess implements RuntimeProcess {
   }
   deploySubagents(queries: string[]): Promise<void> {
     return this.subagents.deploy(queries);
+  }
+  async clearSubagents(): Promise<void> {
+    this.subagents.reset();
   }
   setSubagentAnalytics(
     analytics: AnalyticsRecorder,

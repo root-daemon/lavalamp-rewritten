@@ -580,6 +580,10 @@ export class CodexProcess {
 
   async deploySubagents(_queries: string[]): Promise<void> {}
 
+  async clearSubagents(): Promise<void> {
+    this.subagents.clear();
+  }
+
   private async beginTurn(
     message: string,
     images: PromptImage[] | undefined,

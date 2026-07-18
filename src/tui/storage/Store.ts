@@ -1,4 +1,5 @@
-import type { AppState, Message, SubAgent, Task, ToolCall } from '../state';
+import type { AppState, Message, Task, ToolCall } from '../state';
+import type { RuntimeSubagent } from '../../runtime/types';
 import { createInitialState } from '../state';
 
 export class AppStateStore {
@@ -76,11 +77,11 @@ export class AppStateStore {
     this.notify();
   }
 
-  get subAgents(): SubAgent[] {
+  get subAgents(): RuntimeSubagent[] {
     return this.state.subAgents;
   }
 
-  setSubAgents(value: SubAgent[]): void {
+  setSubAgents(value: RuntimeSubagent[]): void {
     this.state.subAgents = value;
     this.notify();
   }

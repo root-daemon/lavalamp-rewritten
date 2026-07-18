@@ -16,7 +16,6 @@ import type {
   PromptImage,
   QuestionRequestMsg,
 } from './ipc';
-import { SubAgentManager } from './subs';
 import { COLORS } from './theme';
 import type { Message } from './state';
 import { AppStateStore } from './storage/Store';
@@ -62,7 +61,8 @@ import {
   pasteImageFromClipboard,
 } from '../storage/clipboard';
 import { describeImageWithSpectacle } from '../storage/spectacle';
-import { openCodeViewer, openDiffViewer } from './viewers';
+import { openCodeViewer, openDiffViewer, openTextViewer } from './viewers';
+import { formatSubagentInspection } from './subagent-inspection';
 import { configPath, resolveConfig, updateConfig } from '../config/user-config';
 import { BUILD_MODEL, getModelEntry } from '../config/models';
 import { resolveRuntimeRoute, routeSummary } from '../config/runtime-route';
@@ -239,13 +239,6 @@ export async function startTui(options: TuiOptions): Promise<void> {
   let activeStopReason: string | undefined;
   loadAutorun(cwd);
   const permissionRules = loadRules(cwd);
-  const subManager = new SubAgentManager(
-    options.serverPath,
-    options.cwd,
-    options.agentName ?? 'build',
-    analytics,
-    () => activeAnalyticsTurn,
-  );
   let contextTransferPending = false;
 
   const renderer: CliRenderer = await createCliRenderer({
@@ -274,7 +267,6 @@ export async function startTui(options: TuiOptions): Promise<void> {
         spinnerTimer = null;
       }
       clearInterval(lavaLampTimer);
-      subManager.killAll();
       flue.shutdown().catch(() => {});
     },
     screenMode: 'alternate-screen',
@@ -305,6 +297,27 @@ export async function startTui(options: TuiOptions): Promise<void> {
   });
 
   function wireRuntime(): void {
+    flue.setSubagentAnalytics?.(analytics, () => activeAnalyticsTurn);
+    flue.onSubagentsChanged = (subagents) => {
+      state.subAgents = subagents;
+      refreshSubPanel();
+      updateStatus();
+    };
+    flue.onSubagentsComplete = (summary) => {
+      refreshSubPanel();
+      const followUp = `The parallel research has completed. Here are the findings:\n\n${summary}\n\nPlease analyze these results and continue with your task.`;
+      if (state.processing) {
+        state.queuePending.push(withModeTag(followUp));
+      } else {
+        _sendPrompt(followUp).catch((error: unknown) => {
+          addInfoLine(
+            `  subagent follow-up failed: ${error instanceof Error ? error.message : String(error)}`,
+            COLORS.red,
+          );
+        });
+      }
+      refreshQueuePanel();
+    };
     flue.onPermissionRequest = (request: PermissionRequestMsg) => {
       (async () => {
         const choice = await permissionBoxMgr.show(request);
@@ -689,28 +702,6 @@ export async function startTui(options: TuiOptions): Promise<void> {
   function refreshSubPanel() {
     subPanelMgr.refresh(state.subAgents, SPINNER_FRAMES, spinnerFrame);
   }
-
-  subManager.onUpdate = (subs) => {
-    state.subAgents = subs;
-    refreshSubPanel();
-    updateStatus();
-  };
-
-  subManager.onAllComplete = (summary) => {
-    refreshSubPanel();
-    const followUp = `The parallel research has completed. Here are the findings:\n\n${summary}\n\nPlease analyze these results and continue with your task.`;
-    if (state.processing) {
-      state.queuePending.push(withModeTag(followUp));
-    } else {
-      _sendPrompt(followUp).catch((error: unknown) => {
-        addInfoLine(
-          `  subagent follow-up failed: ${error instanceof Error ? error.message : String(error)}`,
-          COLORS.red,
-        );
-      });
-    }
-    refreshQueuePanel();
-  };
 
   const taskPanelMgr = new TaskPanelManager(boxCtx);
   const taskBox = taskPanelMgr.box;
@@ -1480,8 +1471,8 @@ export async function startTui(options: TuiOptions): Promise<void> {
               deployMarker.type === 'parallel_deploy' &&
               Array.isArray(deployMarker.queries)
             ) {
-              subManager
-                .deploy(deployMarker.queries)
+              flue
+                .deploySubagents(deployMarker.queries)
                 .catch((error: unknown) =>
                   addInfoLine(
                     `  subagents failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -2155,7 +2146,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
         mode: 'tui',
         workspaceRoot: cwd,
       });
-      subManager.setAnalytics(analytics, () => activeAnalyticsTurn);
+      flue.setSubagentAnalytics?.(analytics, () => activeAnalyticsTurn);
       state.messages = messages;
       const usage = analytics.conversationUsage(currentSessionId);
       if (usage !== null) {
@@ -2481,7 +2472,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
         state.messages = [];
         currentSessionId = `session_${Date.now()}`;
         flue.clearThread?.();
-        subManager.killAll();
+        await flue.clearSubagents();
         analytics.finish('completed');
         analytics.close();
         analytics = AnalyticsRecorder.create({
@@ -2490,7 +2481,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
           mode: 'tui',
           workspaceRoot: cwd,
         });
-        subManager.setAnalytics(analytics, () => activeAnalyticsTurn);
+        flue.setSubagentAnalytics?.(analytics, () => activeAnalyticsTurn);
         Object.assign(state.usageTotals, {
           cacheRead: 0,
           cacheWrite: 0,
@@ -2950,18 +2941,39 @@ export async function startTui(options: TuiOptions): Promise<void> {
         break;
       }
       case '/subagents': {
+        if (arg.length > 0) {
+          const inspection = await flue.inspectSubagent(arg);
+          const viewerCtx = {
+            closeViewer,
+            cwd,
+            hideMainTui,
+            nextId,
+            onReadError: () => {},
+            overlay: viewerOverlay,
+            renderer,
+          };
+          openTextViewer(
+            viewerCtx,
+            `subagent ${inspection.subagent.name}`,
+            formatSubagentInspection(inspection),
+          );
+          break;
+        }
         const rows =
           state.subAgents.length === 0
             ? [{ content: '  no subagents', fg: COLORS.dim }]
-            : state.subAgents.map((sub) => ({
-                content: `  ${sub.id.padEnd(6)} ${sub.status.padEnd(9)} ${sub.query}`,
+            : [
+              ...state.subAgents.map((sub) => ({
+                content: `  ${sub.id} ${sub.status.padEnd(11)} ${sub.name}: ${sub.task}`,
                 fg:
                   sub.status === 'running'
                     ? COLORS.pink
-                    : sub.status === 'done'
+                    : sub.status === 'completed'
                       ? COLORS.green
                       : COLORS.red,
-              }));
+              })),
+              { content: '  Inspect with /subagents <id>', fg: COLORS.dim },
+            ];
         showResultPanel('/subagents', rows);
         break;
       }
@@ -3159,7 +3171,14 @@ export async function startTui(options: TuiOptions): Promise<void> {
     resultPanel: resultPanelMgr,
     store,
     subBox: subPanelMgr,
-    subManager,
+    stopSubagent: (id: string) => {
+      flue.stopSubagent(id).catch((error: unknown) => {
+        addInfoLine(
+          `  could not stop subagent: ${error instanceof Error ? error.message : String(error)}`,
+          COLORS.red,
+        );
+      });
+    },
     togglePlanMode,
     updateStatus,
     viewerOverlay,
