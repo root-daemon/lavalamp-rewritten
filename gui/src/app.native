@@ -169,15 +169,29 @@
 
           <if test="{pending_question}">
             <panel padding="14">
-              <column gap="8">
+              <column gap="10">
                 <row gap="8" cross="center">
                   <icon name="alert" size="sm" />
                   <column gap="2" grow="1">
-                    <text>Input Required</text>
+                    <row gap="6" cross="center">
+                      <text grow="1">Input Required</text>
+                      <badge variant="secondary">{questionProgressLabel}</badge>
+                    </row>
                     <text wrap="true" foreground="text_muted">{questionText}</text>
                   </column>
                 </row>
-                <text foreground="text_muted">Answer in the composer below.</text>
+                <if test="{hasQuestionOptions}">
+                  <separator />
+                  <column gap="6">
+                    <for each="questionOptions" key="key" as="option">
+                      <button variant="secondary" on-press="answer_question_option:{option.key}" label="Answer option">{option.label}</button>
+                    </for>
+                  </column>
+                </if>
+                <if test="{hasQuestionDefault}">
+                  <text wrap="true" foreground="text_muted">Default: {questionDefaultLabel}</text>
+                </if>
+                <text foreground="text_muted">Select an option or answer in the composer below. Multi-select choices accumulate before Answer.</text>
               </column>
             </panel>
           </if>

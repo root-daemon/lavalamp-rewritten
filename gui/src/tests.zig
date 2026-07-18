@@ -7,7 +7,7 @@ const testing = std.testing;
 test "snapshot JSON populates conversation, tools, sessions, and usage" {
     var model = main.initialModel();
     const body =
-        \\{"ok":true,"data":{"snapshot":{"cursor":9,"processing":true,"assistantText":"Working","thinkingText":"Inspecting repo","terminalOutput":"3 pass\\n","workspace":"/repo","model":"model-a","provider":"cloudflare","usage":{"input":10,"output":5,"cacheRead":2,"cacheWrite":0,"totalTokens":17,"cost":0.03},"messages":[{"role":"user","content":"Fix tests"},{"role":"assistant","content":"Working"}],"tools":[{"id":"tool-1","name":"bash","summary":"bun test","status":"completed","isError":false,"durationMs":20}],"subagents":[{"id":"sub-1","query":"Audit auth parity","status":"running","pid":1234,"durationMs":2500}],"pendingPermission":{"requestId":"perm-1","toolName":"edit","args":{"path":"src/a.ts"}},"pendingQuestion":{"requestId":"question-1","questions":[{"id":"choice","question":"Ship with tests?","type":"input"}]}},"sessions":[{"sessionId":"session-a","prompt":"Fix tests","cwd":"/repo"}],"models":[{"id":"model-a","displayName":"Model A"}],"workspaceStatus":{"git":true,"branch":"main","clean":false,"summary":"2 changed · 1 unstaged · 1 untracked","changes":[{"status":"M","path":"src/main.ts"},{"status":"??","path":"notes.md"}],"diffStat":["src/main.ts | 2 +-","1 file changed, 1 insertion(+), 1 deletion(-)"]},"repoStatus":{"git":true,"repository":"/repo","branch":"main","head":"abc1234 initial","status":"2 changed","webUrl":"https://github.com/owner/repo","pullRequestUrl":"https://github.com/owner/repo/pulls?q=is%3Apr+head%3Amain","actionsUrl":"https://github.com/owner/repo/actions?query=branch%3Amain","pullRequest":{"number":42,"title":"Ship GUI","state":"OPEN","url":"https://github.com/owner/repo/pull/42","reviewDecision":"APPROVED","mergeStateStatus":"CLEAN","isDraft":false},"checks":[{"name":"test","state":"SUCCESS","bucket":"pass"},{"name":"lint","state":"PENDING","bucket":"pending"}],"remotes":[{"name":"origin","url":"git@github.com:owner/repo.git","webUrl":"https://github.com/owner/repo"}],"worktrees":[{"path":"/repo","branch":"main","head":"abc1234","current":true}]},"runtimeStatus":{"authLabel":"Cloudflare login required","authRequired":true,"backend":"flue","gatewayEnabled":true,"gatewayId":"team","gatewaySupported":true,"model":"model-a","provider":"cloudflare-workers-ai","routeLabel":"cloudflare-workers-ai gateway (team)","routeMode":"gateway"}}}
+        \\{"ok":true,"data":{"snapshot":{"cursor":9,"processing":true,"assistantText":"Working","thinkingText":"Inspecting repo","terminalOutput":"3 pass\\n","workspace":"/repo","model":"model-a","provider":"cloudflare","usage":{"input":10,"output":5,"cacheRead":2,"cacheWrite":0,"totalTokens":17,"cost":0.03},"messages":[{"role":"user","content":"Fix tests"},{"role":"assistant","content":"Working"}],"tools":[{"id":"tool-1","name":"bash","summary":"bun test","status":"completed","isError":false,"durationMs":20}],"subagents":[{"id":"sub-1","query":"Audit auth parity","status":"running","pid":1234,"durationMs":2500}],"pendingPermission":{"requestId":"perm-1","toolName":"edit","args":{"path":"src/a.ts"}},"pendingQuestion":{"requestId":"question-1","questions":[{"id":"choice","question":"Ship with tests?","type":"select","options":["Yes","No"],"default":"Yes"}]}},"sessions":[{"sessionId":"session-a","prompt":"Fix tests","cwd":"/repo"}],"models":[{"id":"model-a","displayName":"Model A"}],"workspaceStatus":{"git":true,"branch":"main","clean":false,"summary":"2 changed · 1 unstaged · 1 untracked","changes":[{"status":"M","path":"src/main.ts"},{"status":"??","path":"notes.md"}],"diffStat":["src/main.ts | 2 +-","1 file changed, 1 insertion(+), 1 deletion(-)"]},"repoStatus":{"git":true,"repository":"/repo","branch":"main","head":"abc1234 initial","status":"2 changed","webUrl":"https://github.com/owner/repo","pullRequestUrl":"https://github.com/owner/repo/pulls?q=is%3Apr+head%3Amain","actionsUrl":"https://github.com/owner/repo/actions?query=branch%3Amain","pullRequest":{"number":42,"title":"Ship GUI","state":"OPEN","url":"https://github.com/owner/repo/pull/42","reviewDecision":"APPROVED","mergeStateStatus":"CLEAN","isDraft":false},"checks":[{"name":"test","state":"SUCCESS","bucket":"pass"},{"name":"lint","state":"PENDING","bucket":"pending"}],"remotes":[{"name":"origin","url":"git@github.com:owner/repo.git","webUrl":"https://github.com/owner/repo"}],"worktrees":[{"path":"/repo","branch":"main","head":"abc1234","current":true}]},"runtimeStatus":{"authLabel":"Cloudflare login required","authRequired":true,"backend":"flue","gatewayEnabled":true,"gatewayId":"team","gatewaySupported":true,"model":"model-a","provider":"cloudflare-workers-ai","routeLabel":"cloudflare-workers-ai gateway (team)","routeMode":"gateway"}}}
     ;
 
     try testing.expect(main.applySnapshotJson(&model, body));
@@ -63,6 +63,10 @@ test "snapshot JSON populates conversation, tools, sessions, and usage" {
     try testing.expect(model.pending_question);
     try testing.expectEqualStrings("choice", model.question_id_storage[0..model.question_id_len]);
     try testing.expectEqualStrings("Ship with tests?", model.questionText());
+    try testing.expectEqualStrings("select", model.questionTypeLabel());
+    try testing.expectEqualStrings("Yes", model.questionDefaultLabel());
+    try testing.expectEqual(@as(usize, 2), model.question_option_count);
+    try testing.expectEqualStrings("Yes", model.question_options[0].label());
     try testing.expectEqual(@as(u64, 17), model.total_tokens);
 }
 
@@ -138,6 +142,81 @@ test "sending while a question is pending answers the runtime question" {
     try testing.expectEqual(std.http.Method.POST, request.method);
     try testing.expect(std.mem.endsWith(u8, request.url, "/v1/questions/choice"));
     try testing.expectEqualStrings("{\"answers\":{\"choice\":\"yes \\\"ship\\\"\\nnow\"}}", request.body);
+}
+
+test "select question options answer with structured choice values" {
+    var model = main.initialModel();
+    model.connected = true;
+    model.processing = true;
+    model.pending_question = true;
+    model.host_port = 34197;
+    model.setAuthToken("token-123");
+    model.question_id_len = 6;
+    @memcpy(model.question_id_storage[0..6], "choice");
+    model.question_type_len = 6;
+    @memcpy(model.question_type_storage[0..6], "select");
+    model.question_option_count = 1;
+    model.question_options[0].key = 42;
+    model.question_options[0].label_len = 3;
+    @memcpy(model.question_options[0].label_storage[0..3], "Yes");
+    var fx = main.Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+
+    main.update(&model, .{ .answer_question_option = 42 }, &fx);
+
+    try testing.expect(!model.pending_question);
+    try testing.expectEqual(@as(usize, 1), fx.pendingFetchCount());
+    const request = fx.pendingFetchAt(0).?;
+    try testing.expectEqual(std.http.Method.POST, request.method);
+    try testing.expect(std.mem.endsWith(u8, request.url, "/v1/questions/choice"));
+    try testing.expectEqualStrings("{\"answers\":{\"choice\":\"Yes\"}}", request.body);
+}
+
+test "multiselect question answers encode composer items as arrays" {
+    var model = main.initialModel();
+    model.connected = true;
+    model.processing = true;
+    model.pending_question = true;
+    model.host_port = 34197;
+    model.setAuthToken("token-123");
+    model.question_id_len = 6;
+    @memcpy(model.question_id_storage[0..6], "choice");
+    model.question_type_len = 11;
+    @memcpy(model.question_type_storage[0..11], "multiselect");
+    model.draft.set("tests, polish");
+    var fx = main.Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+
+    main.update(&model, .send, &fx);
+
+    const request = fx.pendingFetchAt(0).?;
+    try testing.expectEqualStrings("{\"answers\":{\"choice\":[\"tests\",\"polish\"]}}", request.body);
+}
+
+test "multiselect question option buttons append comma separated choices" {
+    var model = main.initialModel();
+    model.connected = true;
+    model.pending_question = true;
+    model.question_type_len = 11;
+    @memcpy(model.question_type_storage[0..11], "multiselect");
+    model.question_option_count = 2;
+    model.question_options[0].key = 1;
+    model.question_options[0].label_len = 5;
+    @memcpy(model.question_options[0].label_storage[0..5], "tests");
+    model.question_options[1].key = 2;
+    model.question_options[1].label_len = 6;
+    @memcpy(model.question_options[1].label_storage[0..6], "polish");
+    var fx = main.Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+
+    main.update(&model, .{ .answer_question_option = 1 }, &fx);
+    main.update(&model, .{ .answer_question_option = 2 }, &fx);
+
+    try testing.expectEqualStrings("tests, polish", model.draftText());
+    try testing.expectEqual(@as(usize, 0), fx.pendingFetchCount());
 }
 
 test "selecting a worktree sends a switch command through native host" {

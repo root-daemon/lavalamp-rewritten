@@ -52,6 +52,8 @@ const max_diff_stats = 10;
 const max_subagents = 8;
 const max_repo_worktrees = 8;
 const max_repo_checks = 8;
+const max_questions = 6;
+const max_question_options = 8;
 
 var host_binary_storage: [std.fs.max_path_bytes]u8 = undefined;
 var host_binary_len: usize = 0;
@@ -252,6 +254,16 @@ pub const RepoCheck = struct {
     }
 };
 
+pub const QuestionOption = struct {
+    key: u64 = 0,
+    label_storage: [220]u8 = undefined,
+    label_len: usize = 0,
+
+    pub fn label(self: *const QuestionOption) []const u8 {
+        return self.label_storage[0..self.label_len];
+    }
+};
+
 pub const Model = struct {
     pub const view_unbound = .{
         "connected", "cursor", "queue_count", "host_port", "auth_token_storage", "auth_token_len",
@@ -263,6 +275,7 @@ pub const Model = struct {
         "runtime_route_storage", "runtime_route_len", "runtime_auth_storage", "runtime_auth_len", "runtime_gateway_storage", "runtime_gateway_len", "runtime_auth_required",
         "provider_storage", "provider_len", "backend_storage", "backend_len", "mode_storage", "mode_len", "permission_id_storage", "permission_id_len",
         "permission_tool_storage", "permission_tool_len", "pending_question", "question_id_storage", "question_id_len", "question_text_storage", "question_text_len",
+        "question_type_storage", "question_type_len", "question_default_storage", "question_default_len", "question_count", "question_options", "question_option_count",
         "question_body_storage", "messages", "message_count",
         "tools", "tool_count", "sessions", "session_count", "models", "model_count", "selected_session_key", "command_title_storage", "command_title_len",
         "command_rows", "command_row_count", "workspace_changes", "workspace_change_count", "diff_stats", "diff_stat_count", "total_tokens", "total_cost", "assistantText", "authToken",
@@ -335,6 +348,13 @@ pub const Model = struct {
     question_id_len: usize = 0,
     question_text_storage: [1024]u8 = undefined,
     question_text_len: usize = 0,
+    question_type_storage: [24]u8 = undefined,
+    question_type_len: usize = 0,
+    question_default_storage: [220]u8 = undefined,
+    question_default_len: usize = 0,
+    question_count: usize = 0,
+    question_options: [max_question_options]QuestionOption = [_]QuestionOption{.{}} ** max_question_options,
+    question_option_count: usize = 0,
     question_body_storage: [8192]u8 = undefined,
     messages: [max_messages]Message = [_]Message{.{}} ** max_messages,
     message_count: usize = 0,
@@ -464,6 +484,21 @@ pub const Model = struct {
     pub fn questionText(self: *const Model) []const u8 {
         return self.question_text_storage[0..self.question_text_len];
     }
+    fn questionType(self: *const Model) []const u8 {
+        return self.question_type_storage[0..self.question_type_len];
+    }
+    pub fn questionTypeLabel(self: *const Model) []const u8 {
+        if (self.question_type_len == 0) return "input";
+        return self.questionType();
+    }
+    pub fn questionDefaultLabel(self: *const Model) []const u8 {
+        if (self.question_default_len == 0) return "No default answer";
+        return self.question_default_storage[0..self.question_default_len];
+    }
+    pub fn questionProgressLabel(self: *const Model, arena: std.mem.Allocator) []const u8 {
+        if (self.question_count <= 1) return self.questionTypeLabel();
+        return std.fmt.allocPrint(arena, "1 of {d} · {s}", .{ self.question_count, self.questionTypeLabel() }) catch self.questionTypeLabel();
+    }
     pub fn commandTitle(self: *const Model) []const u8 {
         return self.command_title_storage[0..self.command_title_len];
     }
@@ -478,6 +513,9 @@ pub const Model = struct {
     }
     pub fn subagentItems(self: *const Model) []const Subagent {
         return self.subagents[0..self.subagent_count];
+    }
+    pub fn questionOptions(self: *const Model) []const QuestionOption {
+        return self.question_options[0..self.question_option_count];
     }
     pub fn repoWorktreeItems(self: *const Model) []const RepoWorktree {
         return self.repo_worktrees[0..self.repo_worktree_count];
@@ -529,6 +567,12 @@ pub const Model = struct {
     }
     pub fn hasSubagents(self: *const Model) bool {
         return self.subagent_count > 0;
+    }
+    pub fn hasQuestionOptions(self: *const Model) bool {
+        return self.question_option_count > 0;
+    }
+    pub fn hasQuestionDefault(self: *const Model) bool {
+        return self.question_default_len > 0;
     }
     pub fn hasRepo(self: *const Model) bool {
         return self.repo_git;
@@ -625,6 +669,7 @@ pub const Msg = union(enum) {
     allow_permission,
     always_allow_permission,
     deny_permission,
+    answer_question_option: u64,
     host_line: native_sdk.EffectLine,
     host_exit: native_sdk.EffectExit,
     poll_tick: native_sdk.EffectTimer,
@@ -715,6 +760,10 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.pending_question = false;
             model.question_id_len = 0;
             model.question_text_len = 0;
+            model.question_type_len = 0;
+            model.question_default_len = 0;
+            model.question_count = 0;
+            model.question_option_count = 0;
             model.selected_session_key = 0;
             model.clearCommandResult();
             for (model.sessions[0..model.session_count]) |*session| session.selected = false;
@@ -758,6 +807,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .allow_permission => resolvePermission(model, fx, "allow"),
         .always_allow_permission => resolvePermission(model, fx, "always_allow"),
         .deny_permission => resolvePermission(model, fx, "deny"),
+        .answer_question_option => |key| answerQuestionOption(model, fx, key),
         .host_line => |line| handleHostLine(model, line, fx),
         .host_exit => |exit| {
             model.connected = false;
@@ -879,14 +929,39 @@ fn sendPrompt(model: *Model, fx: *Effects) void {
 }
 
 fn sendQuestionAnswer(model: *Model, fx: *Effects) void {
-    var path_buffer: [256]u8 = undefined;
-    const path = std.fmt.bufPrint(&path_buffer, "/v1/questions/{s}", .{model.questionId()}) catch return;
-    var url_buffer: [320]u8 = undefined;
-    var auth_buffer: [192]u8 = undefined;
     const body = buildQuestionAnswerBody(model) catch {
         setError(model, "Question answer is too long");
         return;
     };
+    sendQuestionBody(model, fx, body);
+}
+
+fn answerQuestionOption(model: *Model, fx: *Effects, key: u64) void {
+    if (!model.pending_question) return;
+    var label: []const u8 = "";
+    for (model.question_options[0..model.question_option_count]) |*option| {
+        if (option.key == key) {
+            label = option.label();
+            break;
+        }
+    }
+    if (label.len == 0) return;
+    if (std.mem.eql(u8, model.questionType(), "multiselect")) {
+        appendQuestionChoice(model, label);
+        return;
+    }
+    const body = buildQuestionValueBody(model, label, false) catch {
+        setError(model, "Question answer is too long");
+        return;
+    };
+    sendQuestionBody(model, fx, body);
+}
+
+fn sendQuestionBody(model: *Model, fx: *Effects, body: []const u8) void {
+    var path_buffer: [256]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buffer, "/v1/questions/{s}", .{model.questionId()}) catch return;
+    var url_buffer: [320]u8 = undefined;
+    var auth_buffer: [192]u8 = undefined;
     const headers = [_]std.http.Header{
         .{ .name = "authorization", .value = authHeader(model, &auth_buffer) },
         .{ .name = "content-type", .value = "application/json" },
@@ -903,6 +978,10 @@ fn sendQuestionAnswer(model: *Model, fx: *Effects) void {
     model.pending_question = false;
     model.question_id_len = 0;
     model.question_text_len = 0;
+    model.question_type_len = 0;
+    model.question_default_len = 0;
+    model.question_count = 0;
+    model.question_option_count = 0;
     model.draft.clear();
     model.error_len = 0;
 }
@@ -948,14 +1027,62 @@ fn appendDraftText(model: *Model, text: []const u8) void {
     model.draft.set(buffer[0..index]);
 }
 
+fn appendQuestionChoice(model: *Model, text: []const u8) void {
+    var buffer: [8192]u8 = undefined;
+    var index: usize = 0;
+    const current = std.mem.trim(u8, model.draft.text(), " \t\r\n");
+    if (current.len > 0) {
+        const count = @min(current.len, buffer.len);
+        @memcpy(buffer[0..count], current[0..count]);
+        index = count;
+        if (index + 2 <= buffer.len) {
+            buffer[index] = ',';
+            buffer[index + 1] = ' ';
+            index += 2;
+        }
+    }
+    if (index < buffer.len) {
+        const count = @min(text.len, buffer.len - index);
+        @memcpy(buffer[index .. index + count], text[0..count]);
+        index += count;
+    }
+    model.draft.set(buffer[0..index]);
+}
+
 fn buildQuestionAnswerBody(model: *Model) ![]const u8 {
+    return buildQuestionValueBody(
+        model,
+        model.draft.text(),
+        std.mem.eql(u8, model.questionType(), "multiselect"),
+    );
+}
+
+fn buildQuestionValueBody(model: *Model, answer: []const u8, as_array: bool) ![]const u8 {
     var index: usize = 0;
     try appendBytes(model.question_body_storage[0..], &index, "{\"answers\":{");
     try appendJsonString(model.question_body_storage[0..], &index, model.questionId());
     try appendBytes(model.question_body_storage[0..], &index, ":");
-    try appendJsonString(model.question_body_storage[0..], &index, model.draft.text());
+    if (as_array) {
+        try appendJsonStringArray(model.question_body_storage[0..], &index, answer);
+    } else {
+        try appendJsonString(model.question_body_storage[0..], &index, answer);
+    }
     try appendBytes(model.question_body_storage[0..], &index, "}}");
     return model.question_body_storage[0..index];
+}
+
+fn appendJsonStringArray(buffer: []u8, index: *usize, text: []const u8) !void {
+    try appendByte(buffer, index, '[');
+    var wrote = false;
+    var parts = std.mem.splitScalar(u8, text, ',');
+    while (parts.next()) |part| {
+        const item = std.mem.trim(u8, part, " \t\r\n");
+        if (item.len == 0) continue;
+        if (wrote) try appendByte(buffer, index, ',');
+        try appendJsonString(buffer, index, item);
+        wrote = true;
+    }
+    try appendByte(buffer, index, ']');
 }
 
 fn appendBytes(buffer: []u8, index: *usize, text: []const u8) !void {
@@ -1135,6 +1262,7 @@ const QuestionPayload = struct {
     question: []const u8 = "",
     type: []const u8 = "",
     options: ?[]const []const u8 = null,
+    @"default": ?std.json.Value = null,
 };
 const PendingQuestionPayload = struct {
     requestId: []const u8 = "",
@@ -1468,14 +1596,70 @@ pub fn applySnapshotJson(model: *Model, body: []const u8) bool {
     }
     if (snapshot.pendingQuestion) |pending| {
         model.pending_question = pending.questions.len > 0;
-        model.question_id_len = copyText(&model.question_id_storage, if (pending.questions.len > 0) pending.questions[0].id else "");
-        model.question_text_len = copyText(&model.question_text_storage, if (pending.questions.len > 0) pending.questions[0].question else "");
+        model.question_count = @min(pending.questions.len, max_questions);
+        model.question_option_count = 0;
+        model.question_default_len = 0;
+        if (pending.questions.len > 0) {
+            const question = pending.questions[0];
+            model.question_id_len = copyText(&model.question_id_storage, question.id);
+            model.question_text_len = copyText(&model.question_text_storage, question.question);
+            model.question_type_len = copyText(&model.question_type_storage, question.type);
+            if (question.@"default") |default_value| {
+                var default_buffer: [220]u8 = undefined;
+                const default_text = questionDefaultText(default_value, &default_buffer);
+                model.question_default_len = copyText(&model.question_default_storage, default_text);
+            }
+            if (question.options) |options| {
+                model.question_option_count = @min(options.len, max_question_options);
+                for (options[0..model.question_option_count], 0..) |option, index| {
+                    const target = &model.question_options[index];
+                    target.key = std.hash.Wyhash.hash(0, option);
+                    target.label_len = copyText(&target.label_storage, option);
+                }
+            }
+        } else {
+            model.question_id_len = 0;
+            model.question_text_len = 0;
+            model.question_type_len = 0;
+        }
     } else {
         model.pending_question = false;
         model.question_id_len = 0;
         model.question_text_len = 0;
+        model.question_type_len = 0;
+        model.question_default_len = 0;
+        model.question_count = 0;
+        model.question_option_count = 0;
     }
     return true;
+}
+
+fn questionDefaultText(value: std.json.Value, buffer: []u8) []const u8 {
+    switch (value) {
+        .string => |text| return text,
+        .array => |items| {
+            var index: usize = 0;
+            for (items.items) |item| {
+                if (item != .string) continue;
+                const text = item.string;
+                if (text.len == 0) continue;
+                if (index > 0 and index < buffer.len) {
+                    buffer[index] = ',';
+                    index += 1;
+                    if (index < buffer.len) {
+                        buffer[index] = ' ';
+                        index += 1;
+                    }
+                }
+                const count = @min(text.len, buffer.len - index);
+                @memcpy(buffer[index .. index + count], text[0..count]);
+                index += count;
+                if (index >= buffer.len) break;
+            }
+            return buffer[0..index];
+        },
+        else => return "",
+    }
 }
 
 fn copyText(destination: anytype, source: []const u8) usize {
