@@ -9,6 +9,7 @@ import { attachmentsForPrompt, type AttachedImage } from '../tui/attachments';
 import type { TuiLoginProgress } from '../tui/login';
 import { loginFromTui } from '../tui/login';
 import type { AgentBackend } from '../runtime/backend';
+import { resolveConfig } from '../config/user-config';
 import { createRuntimeProcess } from '../runtime/process';
 import type { RuntimeCallbacks, RuntimeMode, RuntimeModel } from '../runtime/types';
 import { AnalyticsRecorder, type RunRating } from '../analytics';
@@ -378,8 +379,14 @@ export class GuiRuntime {
       throw new Error('Runtime factory is unavailable');
     }
 
+    const config = resolveConfig();
+    const nextModel = backend === 'codex'
+      ? config.codexModel || undefined
+      : config.defaultModel || undefined;
+
     await this.process.shutdown();
     this.backend = backend;
+    this.model = nextModel;
     this.sessionId = `session_${Date.now()}`;
     this.analytics?.finish('completed');
     this.analytics = this.workspace === undefined
@@ -395,7 +402,7 @@ export class GuiRuntime {
       allowModelFallback: backend === 'codex',
       backend,
       cwd: this.workspace,
-      model: this.model,
+      model: nextModel,
       serverPath: this.serverPath,
       sessionId: this.sessionId,
     });
@@ -405,7 +412,7 @@ export class GuiRuntime {
     this.store.append({
       backend,
       mode: this.mode,
-      model: this.model,
+      model: nextModel,
       type: 'backend.changed',
     });
   }

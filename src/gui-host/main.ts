@@ -141,6 +141,7 @@ export async function runGuiCommand(
       };
     case '/clear':
       runtime.cancel();
+      await runtime.restart();
       runtime.store.resetConversation();
       return { title: '/clear', rows: ['Started a clean GUI session.'] };
     case '/sessions': {
@@ -171,6 +172,8 @@ export async function runGuiCommand(
     case '/models': {
       if (arg.length > 0) {
         await runtime.setModel(arg);
+        const backend = runtime.store.snapshot().backend ?? 'flue';
+        updateConfig(backend === 'codex' ? { codexModel: arg } : { defaultModel: arg });
         return {
           title: cmd,
           rows: [`model set: ${arg}`],
@@ -193,6 +196,7 @@ export async function runGuiCommand(
           return { title: '/backend', rows: ['usage: /backend flue|codex'] };
         }
         await runtime.setBackend(backend);
+        updateConfig({ backend });
         return {
           title: '/backend',
           rows: [`backend set: ${backend}; started a clean session`],
@@ -305,10 +309,11 @@ export async function runGuiCommand(
         rows: ['mode set: build'],
       };
     case '/plan': {
-      await runtime.setMode('plan');
+      const nextMode = runtime.store.snapshot().mode === 'plan' ? 'build' : 'plan';
+      await runtime.setMode(nextMode);
       return {
         title: '/plan',
-        rows: ['mode set: plan'],
+        rows: [`mode set: ${nextMode}`],
       };
     }
     case '/ask':

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { GuiEventStore } from '../src/gui-host/event-store';
 import { runGuiCommand } from '../src/gui-host/main';
 import { GuiRuntime, type GuiProcess } from '../src/gui-host/runtime';
+import { resolveConfig } from '../src/config/user-config';
 import type { PermissionDecision, PromptImage } from '../src/tui/ipc';
 import type { RuntimeCallbacks } from '../src/runtime/types';
 
@@ -97,6 +98,29 @@ describe('GUI host commands', () => {
     const enabled = await runGuiCommand(runtime, workspace, '/server.mjs', '/gateway team');
     expect(enabled.rows).toEqual(['AI Gateway enabled: team']);
     expect(process.restarted).toBe(true);
+  });
+
+  test('clear starts a clean backend session', async () => {
+    const { process, runtime, workspace } = fixture();
+    runtime.store.append({ content: 'old prompt', type: 'user.message' });
+
+    const cleared = await runGuiCommand(runtime, workspace, '/server.mjs', '/clear');
+
+    expect(cleared.rows).toEqual(['Started a clean GUI session.']);
+    expect(process.restarted).toBe(true);
+    expect(runtime.store.snapshot().messages).toEqual([]);
+  });
+
+  test('persists GUI model changes and toggles plan mode', async () => {
+    const { runtime, workspace } = fixture();
+    const model = await runGuiCommand(runtime, workspace, '/server.mjs', '/model model-b');
+    expect(model.rows).toEqual(['model set: model-b']);
+    expect(resolveConfig().defaultModel).toBe('model-b');
+
+    const planOn = await runGuiCommand(runtime, workspace, '/server.mjs', '/plan');
+    expect(planOn.rows).toEqual(['mode set: plan']);
+    const planOff = await runGuiCommand(runtime, workspace, '/server.mjs', '/plan');
+    expect(planOff.rows).toEqual(['mode set: build']);
   });
 
   test('supports safe sudo state, explicit enable, rating, and subagent output', async () => {
