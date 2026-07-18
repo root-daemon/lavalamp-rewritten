@@ -1,0 +1,267 @@
+import { type LanguageModel } from "ai";
+import { openrouter } from "@openrouter/ai-sdk-provider";
+import {
+  resolveMaxConcurrency,
+  resolveRunnerBackend,
+} from "./runner-backend";
+
+export const OUTPUT_DIRECTORY = "./results";
+
+export const MAX_CONCURRENCY = resolveMaxConcurrency(
+  resolveRunnerBackend(process.env.SECURITYBENCH_RUNNER),
+  process.env.SECURITYBENCH_MAX_CONCURRENCY
+);
+export const TEST_RUNS_PER_MODEL = 30;
+export const TIMEOUT_SECONDS = 400;
+export const STAGGER_DELAY_MS = 150;
+
+export type RunnableModel = {
+  name: string;
+  modelId: string;
+  llm: LanguageModel;
+  providerOptions?: any;
+  reasoning?: boolean;
+};
+
+// Include "usage" so we can log cost
+const defaultProviderOptions = {
+  usage: {
+    include: true,
+  },
+};
+
+export const modelsToRun: RunnableModel[] = [
+  // Open weight
+  {
+    name: "kimi-k2-thinking",
+    modelId: "moonshotai/kimi-k2-thinking",
+    llm: openrouter("moonshotai/kimi-k2-thinking", {
+      ...defaultProviderOptions,
+      reasoning: { effort: "high" },
+    }),
+    reasoning: true,
+  },
+  {
+    name: "kimi-k2.5",
+    modelId: "moonshotai/kimi-k2.5",
+    llm: openrouter("moonshotai/kimi-k2.5", {
+      ...defaultProviderOptions,
+      reasoning: { effort: "high" },
+    }),
+    reasoning: true,
+  },
+  {
+    name: "glm-5",
+    modelId: "z-ai/glm-5",
+    llm: openrouter("z-ai/glm-5", {
+      ...defaultProviderOptions,
+      reasoning: { effort: "high" },
+    }),
+    reasoning: true,
+  },
+  {
+    name: "minimax-m2.5",
+    modelId: "minimax/minimax-m2.5",
+    llm: openrouter("minimax/minimax-m2.5", {
+      ...defaultProviderOptions,
+      reasoning: { effort: "high" },
+    }),
+    reasoning: true,
+  },
+  {
+    name: "gpt-oss-120b-high",
+    modelId: "openai/gpt-oss-120b",
+    llm: openrouter("openai/gpt-oss-120b", {
+      ...defaultProviderOptions,
+      reasoning: { effort: "high" },
+    }),
+    reasoning: true,
+  },
+  {
+    name: "deepseek-v3.2-thinking-high",
+    modelId: "deepseek/deepseek-v3.2",
+    llm: openrouter("deepseek/deepseek-v3.2", {
+      ...defaultProviderOptions,
+      reasoning: { effort: "high" },
+    }),
+    reasoning: true,
+  },
+
+  // Grok
+  {
+    name: "grok-4",
+    modelId: "x-ai/grok-4",
+    llm: openrouter("x-ai/grok-4", {
+      ...defaultProviderOptions,
+      reasoning: { effort: "high" },
+    }),
+    reasoning: true,
+  },
+  {
+    name: "grok-4.1-fast",
+    modelId: "x-ai/grok-4.1-fast",
+    llm: openrouter("x-ai/grok-4.1-fast", {
+      ...defaultProviderOptions,
+      reasoning: { effort: "high" },
+    }),
+    reasoning: true,
+  },
+
+  // Gemini
+  {
+    name: "gemini-3-pro-preview",
+    modelId: "google/gemini-3-pro-preview",
+    llm: openrouter("google/gemini-3-pro-preview", {
+      ...defaultProviderOptions,
+      reasoning: { effort: "high" },
+    }),
+    reasoning: true,
+  },
+  {
+    name: "gemini-3.1-pro-preview",
+    modelId: "google/gemini-3.1-pro-preview",
+    llm: openrouter("google/gemini-3.1-pro-preview", defaultProviderOptions),
+    reasoning: true,
+  },
+  // Anthropic
+  {
+    name: "claude-4.6-sonnet",
+    modelId: "anthropic/claude-sonnet-4.6",
+    llm: openrouter("anthropic/claude-sonnet-4.6", {
+      ...defaultProviderOptions,
+      reasoning: { effort: "high" },
+    }),
+    reasoning: true,
+  },
+  {
+    name: "claude-4.5-opus-thinking-high",
+    modelId: "anthropic/claude-opus-4.5",
+    llm: openrouter("anthropic/claude-opus-4.5", {
+      ...defaultProviderOptions,
+      reasoning: { effort: "high" },
+    }),
+    reasoning: true,
+  },
+  {
+    name: "claude-4.6-opus-thinking-high",
+    modelId: "anthropic/claude-opus-4.6",
+    llm: openrouter("anthropic/claude-opus-4.6", {
+      ...defaultProviderOptions,
+      reasoning: { effort: "high" },
+    }),
+    reasoning: true,
+  },
+
+  // OpenAI
+
+  {
+    name: "gpt-5-minimal",
+    modelId: "openai/gpt-5",
+    llm: openrouter("openai/gpt-5", {
+      ...defaultProviderOptions,
+      reasoning: {
+        // @ts-expect-error OpenRouter supports this GPT-5 effort at runtime.
+        effort: "minimal",
+      },
+    }),
+    reasoning: true,
+  },
+  {
+    name: "gpt-5-default",
+    modelId: "openai/gpt-5",
+    llm: openrouter("openai/gpt-5", defaultProviderOptions),
+    reasoning: true,
+  },
+  {
+    name: "gpt-5-high",
+    modelId: "openai/gpt-5",
+    llm: openrouter("openai/gpt-5", {
+      ...defaultProviderOptions,
+      reasoning: {
+        effort: "high",
+      },
+    }),
+    reasoning: true,
+  },
+  {
+    name: "gpt-5-mini",
+    modelId: "openai/gpt-5-mini",
+    llm: openrouter("openai/gpt-5-mini", defaultProviderOptions),
+    reasoning: true,
+  },
+
+  {
+    name: "gpt-5.1-high",
+    modelId: "openai/gpt-5.1",
+    llm: openrouter("openai/gpt-5.1", {
+      ...defaultProviderOptions,
+      reasoning: {
+        effort: "high",
+      },
+    }),
+    reasoning: true,
+  },
+
+  {
+    name: "gpt-5.2-default",
+    modelId: "openai/gpt-5.2",
+    llm: openrouter("openai/gpt-5.2", defaultProviderOptions),
+    reasoning: true,
+  },
+  {
+    name: "gpt-5.2-high",
+    modelId: "openai/gpt-5.2",
+    llm: openrouter("openai/gpt-5.2", {
+      ...defaultProviderOptions,
+      reasoning: {
+        effort: "high",
+      },
+    }),
+    reasoning: true,
+  },
+  {
+    name: "gpt-5.2-xhigh",
+    modelId: "openai/gpt-5.2",
+    llm: openrouter("openai/gpt-5.2", {
+      ...defaultProviderOptions,
+      reasoning: {
+        // @ts-expect-error OpenRouter supports this GPT-5 effort at runtime.
+        effort: "xhigh",
+      },
+    }),
+    reasoning: true,
+  },
+  {
+    name: "gpt-5.2-pro",
+    modelId: "openai/gpt-5.2-pro",
+    llm: openrouter("openai/gpt-5.2-pro", {
+      ...defaultProviderOptions,
+      reasoning: {
+        effort: "high",
+      },
+    }),
+    reasoning: true,
+  },
+  {
+    name: "gemini-3-flash-high",
+    modelId: "google/gemini-3-flash-preview",
+    llm: openrouter("google/gemini-3-flash-preview", {
+      ...defaultProviderOptions,
+      reasoning: {
+        effort: "high",
+      },
+    }),
+    reasoning: true,
+  },
+  {
+    name: "gemini-3-flash-low",
+    modelId: "google/gemini-3-flash-preview",
+    llm: openrouter("google/gemini-3-flash-preview", {
+      ...defaultProviderOptions,
+      reasoning: {
+        effort: "low",
+      },
+    }),
+    reasoning: true,
+  },
+];

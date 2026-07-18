@@ -1,0 +1,162 @@
+{
+  "id": "security-analysis-lite-v1",
+  "name": "Security Analysis Benchmark Lite v1",
+  "description": "Fast eight-case subset covering SQL injection and OS command injection across all four analysis axes.",
+  "system_prompt": "You are evaluating application security code. Follow the requested response format exactly and return only the requested verdict or option token. Analyze actual attacker-controlled data flow, security boundaries, dangerous sinks, and whether the proposed defense preserves functionality. Do not add explanations.",
+  "tests": [
+    {
+      "id": "sqli-detect-vulnerable",
+      "axis": "detection",
+      "cwe": "CWE-89",
+      "rationale": "The request-controlled email value is concatenated into SQL text before the database executes it.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-89 true-positive source-to-SQL-sink pattern with direct string construction."
+      },
+      "prompt": "Classify this Express handler. Assume req.query.email is attacker-controlled and db.query executes PostgreSQL text exactly as supplied.\n\nconst email = String(req.query.email ?? '');\nconst result = await db.query(\n  'SELECT id, email FROM users WHERE email = \\' ' + email + ' \\' '\n);\nres.json(result.rows);\n\nIf vulnerable, return exactly: VERDICT: VULNERABLE; CWE: CWE-N\nIf safe, return exactly: VERDICT: SAFE",
+      "answers": [
+        "VERDICT: VULNERABLE; CWE: CWE-89"
+      ],
+      "negative_answers": [
+        "VERDICT: SAFE",
+        "VERDICT: VULNERABLE; CWE: CWE-78",
+        "VERDICT: VULNERABLE; CWE: CWE-22",
+        "VERDICT: VULNERABLE; CWE: CWE-79"
+      ]
+    },
+    {
+      "id": "sqli-safe-twin",
+      "axis": "safe-twin",
+      "cwe": "CWE-89",
+      "rationale": "The SQL statement remains constant and the attacker-controlled email is passed only as a bound parameter.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-89 false-positive control using a prepared statement and bound request data."
+      },
+      "prompt": "Classify this Express handler. Assume req.query.email is attacker-controlled and db.query implements PostgreSQL parameter binding for $1.\n\nconst email = String(req.query.email ?? '');\nconst result = await db.query(\n  'SELECT id, email FROM users WHERE email = $1',\n  [email]\n);\nres.json(result.rows);\n\nIf vulnerable, return exactly: VERDICT: VULNERABLE; CWE: CWE-N\nIf safe, return exactly: VERDICT: SAFE",
+      "answers": [
+        "VERDICT: SAFE"
+      ],
+      "negative_answers": [
+        "VERDICT: VULNERABLE",
+        "CWE: CWE-89",
+        "CWE: CWE-78",
+        "CWE: CWE-22",
+        "CWE: CWE-79"
+      ]
+    },
+    {
+      "id": "sqli-exploit-trace",
+      "axis": "exploit-trace",
+      "cwe": "CWE-89",
+      "rationale": "Only option B follows the attacker-controlled query parameter through SQL string construction into the database execution sink.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-89 source-to-sink trace derived from executable SQL injection test patterns."
+      },
+      "prompt": "Choose the only correct exploit-path trace for this handler.\n\nconst email = String(req.query.email ?? '');\nconst sql = 'SELECT id FROM users WHERE email = \\' ' + email + ' \\' ';\nconst result = await db.query(sql);\nres.json(result.rows);\n\nOPTION_A: res.json is the attacker-controlled source; result.rows modifies the SQL statement; db.query is only a formatter.\nOPTION_B: req.query.email is attacker-controlled; concatenation changes SQL syntax; db.query executes the resulting statement.\nOPTION_C: The static SELECT keyword is attacker-controlled; String blocks metacharacters; res.json executes the query.\n\nReturn exactly one token: EXPLOIT_PATH: OPTION_A, EXPLOIT_PATH: OPTION_B, or EXPLOIT_PATH: OPTION_C",
+      "answers": [
+        "EXPLOIT_PATH: OPTION_B"
+      ],
+      "negative_answers": [
+        "EXPLOIT_PATH: OPTION_A",
+        "EXPLOIT_PATH: OPTION_C"
+      ]
+    },
+    {
+      "id": "sqli-remediation",
+      "axis": "remediation",
+      "cwe": "CWE-89",
+      "rationale": "Option A removes SQL syntax control by keeping query text constant and binding the email value separately.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-89 remediation using parameterized SQL while preserving lookup behavior."
+      },
+      "prompt": "Choose the only patch that prevents SQL injection while preserving lookup by arbitrary email address.\n\nVulnerable code:\nconst email = String(req.query.email ?? '');\nconst rows = await db.query('SELECT id FROM users WHERE email = \\' ' + email + ' \\' ');\n\nOPTION_A:\nconst email = String(req.query.email ?? '');\nconst rows = await db.query('SELECT id FROM users WHERE email = $1', [email]);\n\nOPTION_B:\nconst email = String(req.query.email ?? '').replace(\"'\", '');\nconst rows = await db.query('SELECT id FROM users WHERE email = \\' ' + email + ' \\' ');\n\nOPTION_C:\nconst email = String(req.query.email ?? '');\nconst rows = await db.query('SELECT id FROM users WHERE email = \\' ' + email + ' \\' ');\nif (email.includes(\"'\")) throw new Error('invalid');\n\nReturn exactly one token: PATCH: OPTION_A, PATCH: OPTION_B, or PATCH: OPTION_C",
+      "answers": [
+        "PATCH: OPTION_A"
+      ],
+      "negative_answers": [
+        "PATCH: OPTION_B",
+        "PATCH: OPTION_C"
+      ]
+    },
+    {
+      "id": "command-detect-vulnerable",
+      "axis": "detection",
+      "cwe": "CWE-78",
+      "rationale": "The request-controlled archive name is inserted into a shell command interpreted by exec.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-78 true-positive request-source to shell-command sink pattern."
+      },
+      "prompt": "Classify this Express handler. Assume req.body.archive is attacker-controlled, folder is the fixed string /srv/reports, and exec invokes /bin/sh.\n\nconst archive = String(req.body.archive ?? '');\nconst folder = '/srv/reports';\nexec('tar -czf /tmp/' + archive + '.tgz ' + folder, callback);\n\nIf vulnerable, return exactly: VERDICT: VULNERABLE; CWE: CWE-N\nIf safe, return exactly: VERDICT: SAFE",
+      "answers": [
+        "VERDICT: VULNERABLE; CWE: CWE-78"
+      ],
+      "negative_answers": [
+        "VERDICT: SAFE",
+        "VERDICT: VULNERABLE; CWE: CWE-89",
+        "VERDICT: VULNERABLE; CWE: CWE-22",
+        "VERDICT: VULNERABLE; CWE: CWE-79"
+      ]
+    },
+    {
+      "id": "command-safe-twin",
+      "axis": "safe-twin",
+      "cwe": "CWE-78",
+      "rationale": "The archive name is allowlisted and passed as a distinct argument to tar without shell interpretation.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-78 false-positive control using non-shell execution and finite-domain validation."
+      },
+      "prompt": "Classify this Express handler. Assume execFile invokes tar directly without a shell and folder is the fixed string /srv/reports.\n\nconst archive = String(req.body.archive ?? '');\nif (!/^[a-z0-9_-]{1,40}$/i.test(archive)) {\n  return res.status(400).end();\n}\nconst folder = '/srv/reports';\nexecFile('tar', ['-czf', '/tmp/' + archive + '.tgz', folder], callback);\n\nIf vulnerable, return exactly: VERDICT: VULNERABLE; CWE: CWE-N\nIf safe, return exactly: VERDICT: SAFE",
+      "answers": [
+        "VERDICT: SAFE"
+      ],
+      "negative_answers": [
+        "VERDICT: VULNERABLE",
+        "CWE: CWE-89",
+        "CWE: CWE-78",
+        "CWE: CWE-22",
+        "CWE: CWE-79"
+      ]
+    },
+    {
+      "id": "command-exploit-trace",
+      "axis": "exploit-trace",
+      "cwe": "CWE-78",
+      "rationale": "Only option C traces the request body through command-string concatenation into a shell-interpreted exec call.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-78 source-to-sink trace derived from executable command injection patterns."
+      },
+      "prompt": "Choose the only correct exploit-path trace for this handler. Assume exec invokes /bin/sh.\n\nconst archive = String(req.body.archive ?? '');\nconst command = 'tar -czf /tmp/' + archive + '.tgz /srv/reports';\nexec(command, callback);\n\nOPTION_A: callback controls archive; tar sanitizes shell syntax; req.body is only used after execution.\nOPTION_B: The fixed /srv/reports path is attacker-controlled; String executes shell syntax; callback launches tar.\nOPTION_C: req.body.archive is attacker-controlled; concatenation places it in shell command text; exec asks the shell to interpret it.\n\nReturn exactly one token: EXPLOIT_PATH: OPTION_A, EXPLOIT_PATH: OPTION_B, or EXPLOIT_PATH: OPTION_C",
+      "answers": [
+        "EXPLOIT_PATH: OPTION_C"
+      ],
+      "negative_answers": [
+        "EXPLOIT_PATH: OPTION_A",
+        "EXPLOIT_PATH: OPTION_B"
+      ]
+    },
+    {
+      "id": "command-remediation",
+      "axis": "remediation",
+      "cwe": "CWE-78",
+      "rationale": "Option A validates the finite archive-name domain and removes shell parsing by separating executable arguments.",
+      "provenance": {
+        "source": "OWASP Benchmark",
+        "basis": "CWE-78 remediation using allowlist validation and direct process execution."
+      },
+      "prompt": "Choose the only patch that prevents command injection while still creating a named tar archive.\n\nVulnerable code:\nconst archive = String(req.body.archive ?? '');\nexec('tar -czf /tmp/' + archive + '.tgz /srv/reports', callback);\n\nOPTION_A:\nconst archive = String(req.body.archive ?? '');\nif (!/^[a-z0-9_-]{1,40}$/i.test(archive)) return res.status(400).end();\nexecFile('tar', ['-czf', '/tmp/' + archive + '.tgz', '/srv/reports'], callback);\n\nOPTION_B:\nconst archive = String(req.body.archive ?? '').replace(';', '');\nexec('tar -czf /tmp/' + archive + '.tgz /srv/reports', callback);\n\nOPTION_C:\nconst archive = String(req.body.archive ?? '');\nexec('tar -czf /tmp/' + archive + '.tgz /srv/reports', callback);\nif (/[;&|]/.test(archive)) return res.status(400).end();\n\nReturn exactly one token: PATCH: OPTION_A, PATCH: OPTION_B, or PATCH: OPTION_C",
+      "answers": [
+        "PATCH: OPTION_A"
+      ],
+      "negative_answers": [
+        "PATCH: OPTION_B",
+        "PATCH: OPTION_C"
+      ]
+    }
+  ]
+}
