@@ -25,6 +25,9 @@ export type GuiEventInput =
   | { type: 'model.changed'; model: string }
   | { type: 'notice'; message: string }
   | { type: 'user.message'; content: string }
+  | { type: 'prompt.queued'; content: string }
+  | { type: 'prompt.dequeued' }
+  | { type: 'prompt.queue_cleared' }
   | { type: 'turn.started' }
   | { type: 'text.delta'; delta: string }
   | { type: 'thinking.delta'; delta: string }
@@ -85,6 +88,7 @@ export interface PendingQuestion {
 export interface GuiSnapshot {
   cursor: number;
   processing: boolean;
+  queueSize: number;
   assistantText: string;
   thinkingText: string;
   terminalOutput: string;

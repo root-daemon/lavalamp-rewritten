@@ -70,6 +70,11 @@ export class GuiRuntime {
   private activeTurnId?: string;
   private imageAttachments: AttachedImage[] = [];
   private imageCounter = 0;
+  private promptQueue: Array<{
+    prompt: string;
+    sessionId?: string;
+    images: PromptImage[];
+  }> = [];
 
   constructor(options: GuiRuntimeOptions & {
     backend?: AgentBackend;
@@ -165,27 +170,42 @@ export class GuiRuntime {
   }
 
   submitPrompt(prompt: string, sessionId?: string): string {
-    if (this.store.snapshot().processing) {
-      throw new Error('A turn is already running');
-    }
     const trimmed = prompt.trim();
     if (trimmed.length === 0) {
       throw new Error('Prompt is required');
     }
-    const promptAttachments = attachmentsForPrompt(trimmed, this.imageAttachments);
+    const images = this.collectPromptImages(trimmed);
+    if (this.store.snapshot().processing) {
+      this.promptQueue.push({ images, prompt: trimmed, sessionId });
+      this.store.append({ content: trimmed, type: 'prompt.queued' });
+      return `queued-${this.promptQueue.length}`;
+    }
+    return this.startPrompt(trimmed, sessionId, images);
+  }
+
+  private collectPromptImages(prompt: string): PromptImage[] {
+    const promptAttachments = attachmentsForPrompt(prompt, this.imageAttachments);
     this.imageAttachments = [];
-    const images: PromptImage[] = promptAttachments.map((image) => ({
+    return promptAttachments.map((image) => ({
       data: '',
       mimeType: 'image/png',
       path: image.path,
       type: 'image',
     }));
-    this.store.append({ content: trimmed, type: 'user.message' });
-    return this.process.prompt(trimmed, {
+  }
+
+  private startPrompt(
+    prompt: string,
+    sessionId: string | undefined,
+    images: PromptImage[],
+  ): string {
+    this.store.append({ content: prompt, type: 'user.message' });
+    return this.process.prompt(prompt, {
       onError: (error) => {
         this.analytics?.finishTurn(this.activeTurnId, 'failed');
         this.activeTurnId = undefined;
         this.store.append({ message: error.message, type: 'turn.failed' });
+        this.drainPromptQueue();
       },
       onEvent: (event) => {
         switch (event.type) {
@@ -257,12 +277,37 @@ export class GuiRuntime {
             totalTokens: result.usage.totalTokens,
           },
         });
+        this.drainPromptQueue();
       },
       onStarted: () => {
         this.activeTurnId = this.analytics?.startTurn();
         this.store.append({ type: 'turn.started' });
       },
     }, sessionId, images);
+  }
+
+  private drainPromptQueue(): void {
+    if (this.store.snapshot().processing || this.promptQueue.length === 0) {
+      return;
+    }
+    const next = this.promptQueue.shift();
+    if (next === undefined) return;
+    this.store.append({ type: 'prompt.dequeued' });
+    try {
+      this.startPrompt(next.prompt, next.sessionId, next.images);
+    } catch (error) {
+      this.store.append({
+        message: error instanceof Error ? error.message : String(error),
+        type: 'turn.failed',
+      });
+      this.drainPromptQueue();
+    }
+  }
+
+  private clearPromptQueue(): void {
+    if (this.promptQueue.length === 0) return;
+    this.promptQueue = [];
+    this.store.append({ type: 'prompt.queue_cleared' });
   }
 
   attachImage(path: string): string {
@@ -420,19 +465,20 @@ export class GuiRuntime {
   }
 
   cancel(): void {
-    if (!this.store.snapshot().processing) {
-      return;
+    this.clearPromptQueue();
+    if (this.store.snapshot().processing) {
+      this.process.cancel();
+      this.analytics?.finishTurn(this.activeTurnId, 'interrupted');
+      this.activeTurnId = undefined;
+      this.store.append({ type: 'turn.cancelled' });
     }
-    this.process.cancel();
-    this.analytics?.finishTurn(this.activeTurnId, 'interrupted');
-    this.activeTurnId = undefined;
-    this.store.append({ type: 'turn.cancelled' });
   }
 
   async restart(): Promise<void> {
     if (this.store.snapshot().processing) {
       throw new Error('Cannot restart while a turn is running');
     }
+    this.clearPromptQueue();
     await this.process.restart?.();
   }
 
@@ -442,6 +488,7 @@ export class GuiRuntime {
 
   async shutdown(): Promise<void> {
     const processing = this.store.snapshot().processing;
+    this.clearPromptQueue();
     if (processing) {
       this.analytics?.finishTurn(this.activeTurnId, 'interrupted');
       this.activeTurnId = undefined;

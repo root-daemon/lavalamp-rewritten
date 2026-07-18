@@ -45,6 +45,7 @@ const command_fetch_key: u64 = 105;
 const max_messages = 40;
 const max_tools = 24;
 const max_sessions = 16;
+const max_models = 24;
 const max_command_rows = 48;
 
 const Role = enum { user, assistant };
@@ -108,6 +109,24 @@ pub const Session = struct {
     }
 };
 
+pub const ModelOption = struct {
+    key: u64 = 0,
+    id_storage: [160]u8 = undefined,
+    id_len: usize = 0,
+    name_storage: [220]u8 = undefined,
+    name_len: usize = 0,
+    selected: bool = false,
+
+    pub fn id(self: *const ModelOption) []const u8 {
+        return self.id_storage[0..self.id_len];
+    }
+
+    pub fn displayName(self: *const ModelOption) []const u8 {
+        if (self.name_len == 0) return self.id();
+        return self.name_storage[0..self.name_len];
+    }
+};
+
 pub const CommandRow = struct {
     id: u64 = 0,
     storage: [512]u8 = undefined,
@@ -125,14 +144,14 @@ pub const CommandRow = struct {
 
 pub const Model = struct {
     pub const view_unbound = .{
-        "connected", "cursor", "host_port", "auth_token_storage", "auth_token_len",
+        "connected", "cursor", "queue_count", "host_port", "auth_token_storage", "auth_token_len",
         "draft", "assistant_storage", "assistant_len", "thinking_storage", "thinking_len",
         "terminal_storage", "terminal_len", "error_storage", "error_len",
         "workspace_storage", "workspace_len", "model_storage", "model_len",
         "provider_storage", "provider_len", "backend_storage", "backend_len", "mode_storage", "mode_len", "permission_id_storage", "permission_id_len",
         "permission_tool_storage", "permission_tool_len", "pending_question", "question_id_storage", "question_id_len", "question_text_storage", "question_text_len",
         "question_body_storage", "messages", "message_count",
-        "tools", "tool_count", "sessions", "session_count", "selected_session_key", "command_title_storage", "command_title_len",
+        "tools", "tool_count", "sessions", "session_count", "models", "model_count", "selected_session_key", "command_title_storage", "command_title_len",
         "command_rows", "command_row_count", "total_tokens", "total_cost", "assistantText", "authToken",
         "permissionId", "hasMessages",
     };
@@ -140,6 +159,7 @@ pub const Model = struct {
     connected: bool = false,
     processing: bool = false,
     cursor: u64 = 0,
+    queue_count: u64 = 0,
     host_port: u16 = 0,
     auth_token_storage: [128]u8 = undefined,
     auth_token_len: usize = 0,
@@ -179,6 +199,8 @@ pub const Model = struct {
     tool_count: usize = 0,
     sessions: [max_sessions]Session = [_]Session{.{}} ** max_sessions,
     session_count: usize = 0,
+    models: [max_models]ModelOption = [_]ModelOption{.{}} ** max_models,
+    model_count: usize = 0,
     selected_session_key: u64 = 0,
     command_title_storage: [96]u8 = undefined,
     command_title_len: usize = 0,
@@ -252,6 +274,9 @@ pub const Model = struct {
     pub fn sessionItems(self: *const Model) []const Session {
         return self.sessions[0..self.session_count];
     }
+    pub fn modelItems(self: *const Model) []const ModelOption {
+        return self.models[0..self.model_count];
+    }
     fn selectedSessionId(self: *const Model) []const u8 {
         for (self.sessions[0..self.session_count]) |*session| {
             if (session.key == self.selected_session_key) return session.id();
@@ -269,6 +294,9 @@ pub const Model = struct {
     }
     pub fn hasTools(self: *const Model) bool {
         return self.tool_count > 0;
+    }
+    pub fn hasModels(self: *const Model) bool {
+        return self.model_count > 0;
     }
     pub fn hasCommandResult(self: *const Model) bool {
         return self.command_row_count > 0;
@@ -290,12 +318,18 @@ pub const Model = struct {
     }
     pub fn sendDisabled(self: *const Model) bool {
         if (!self.connected or self.draft.isEmpty()) return true;
-        return self.processing and !self.pending_question;
+        return false;
     }
     pub fn connectionLabel(self: *const Model) []const u8 {
         if (!self.connected) return "Connecting";
         if (self.processing) return "Running";
         return "Ready";
+    }
+    pub fn queueLabel(self: *const Model, arena: std.mem.Allocator) []const u8 {
+        return std.fmt.allocPrint(arena, "{d} queued", .{self.queue_count}) catch "Queue unavailable";
+    }
+    pub fn hasQueuedPrompts(self: *const Model) bool {
+        return self.queue_count > 0;
     }
     pub fn setAuthToken(self: *Model, text: []const u8) void {
         self.auth_token_len = copyText(&self.auth_token_storage, text);
@@ -312,6 +346,7 @@ pub const Msg = union(enum) {
     cancel,
     new_chat,
     select_session: u64,
+    select_model: u64,
     command_help,
     command_sessions,
     command_models,
@@ -325,6 +360,7 @@ pub const Msg = union(enum) {
     command_gateway,
     command_rate,
     command_workspace,
+    command_skills,
     command_sudo,
     command_analytics,
     command_benchmarks,
@@ -401,6 +437,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             for (model.sessions[0..model.session_count]) |*session| session.selected = false;
         },
         .select_session => |key| selectSession(model, key, fx),
+        .select_model => |key| selectModel(model, key, fx),
         .command_help => sendCommand(model, fx, "/help", false),
         .command_sessions => sendCommand(model, fx, "/sessions", false),
         .command_models => sendCommand(model, fx, "/models", false),
@@ -414,6 +451,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .command_gateway => sendCommand(model, fx, "/gateway", false),
         .command_rate => sendCommand(model, fx, "/rate", false),
         .command_workspace => sendCommand(model, fx, "/workspace", false),
+        .command_skills => sendCommand(model, fx, "/skills", false),
         .command_sudo => sendCommand(model, fx, "/sudo", false),
         .command_analytics => sendCommand(model, fx, "/analytics", false),
         .command_benchmarks => sendCommand(model, fx, "/benchmarks", false),
@@ -713,6 +751,18 @@ fn selectSession(model: *Model, key: u64, fx: *Effects) void {
     });
 }
 
+fn selectModel(model: *Model, key: u64, fx: *Effects) void {
+    var model_id: []const u8 = "";
+    for (model.models[0..model.model_count]) |*option| {
+        option.selected = option.key == key;
+        if (option.selected) model_id = option.id();
+    }
+    if (model_id.len == 0) return;
+    var command_buffer: [192]u8 = undefined;
+    const command = std.fmt.bufPrint(&command_buffer, "/model {s}", .{model_id}) catch return;
+    sendCommand(model, fx, command, false);
+}
+
 fn resolvePermission(model: *Model, fx: *Effects, decision: []const u8) void {
     if (!model.permission_pending) return;
     var path_buffer: [256]u8 = undefined;
@@ -767,6 +817,7 @@ const PendingQuestionPayload = struct {
 const SnapshotPayload = struct {
     cursor: u64 = 0,
     processing: bool = false,
+    queueSize: u64 = 0,
     assistantText: []const u8 = "",
     thinkingText: []const u8 = "",
     terminalOutput: []const u8 = "",
@@ -854,6 +905,7 @@ pub fn applySnapshotJson(model: *Model, body: []const u8) bool {
     const snapshot = data.snapshot;
     model.cursor = snapshot.cursor;
     model.processing = snapshot.processing;
+    model.queue_count = snapshot.queueSize;
     model.assistant_len = copyText(&model.assistant_storage, snapshot.assistantText);
     model.thinking_len = copyText(&model.thinking_storage, snapshot.thinkingText);
     model.terminal_len = copyText(&model.terminal_storage, snapshot.terminalOutput);
@@ -889,6 +941,15 @@ pub fn applySnapshotJson(model: *Model, body: []const u8) bool {
         target.id_len = copyText(&target.id_storage, session.sessionId);
         target.prompt_len = copyText(&target.prompt_storage, session.prompt);
         target.selected = target.key == model.selected_session_key;
+    }
+
+    model.model_count = @min(data.models.len, max_models);
+    for (data.models[0..model.model_count], 0..) |runtime_model, index| {
+        const target = &model.models[index];
+        target.key = std.hash.Wyhash.hash(0, runtime_model.id);
+        target.id_len = copyText(&target.id_storage, runtime_model.id);
+        target.name_len = copyText(&target.name_storage, runtime_model.displayName);
+        target.selected = model.model_len > 0 and std.mem.eql(u8, target.id(), model.modelLabel());
     }
 
     if (snapshot.pendingPermission) |permission| {

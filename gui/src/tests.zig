@@ -22,6 +22,10 @@ test "snapshot JSON populates conversation, tools, sessions, and usage" {
     try testing.expectEqualStrings("bun test", model.tools[0].summary());
     try testing.expectEqual(@as(usize, 1), model.session_count);
     try testing.expectEqualStrings("session-a", model.sessions[0].id());
+    try testing.expectEqual(@as(usize, 1), model.model_count);
+    try testing.expectEqualStrings("model-a", model.models[0].id());
+    try testing.expectEqualStrings("Model A", model.models[0].displayName());
+    try testing.expect(model.models[0].selected);
     try testing.expect(model.permission_pending);
     try testing.expectEqualStrings("perm-1", model.permissionId());
     try testing.expect(model.pending_question);

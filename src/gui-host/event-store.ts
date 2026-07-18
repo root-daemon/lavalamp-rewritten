@@ -13,6 +13,7 @@ export class GuiEventStore {
     assistantText: '',
     cursor: 0,
     processing: false,
+    queueSize: 0,
     messages: [],
     terminalOutput: '',
     thinkingText: '',
@@ -107,6 +108,22 @@ export class GuiEventStore {
             { content: event.content, role: 'user' as const },
           ].slice(-80),
         };
+        break;
+      case 'prompt.queued':
+        this.current = {
+          ...this.current,
+          error: undefined,
+          queueSize: this.current.queueSize + 1,
+        };
+        break;
+      case 'prompt.dequeued':
+        this.current = {
+          ...this.current,
+          queueSize: Math.max(0, this.current.queueSize - 1),
+        };
+        break;
+      case 'prompt.queue_cleared':
+        this.current = { ...this.current, queueSize: 0 };
         break;
       case 'turn.started':
         this.current = {
@@ -236,6 +253,7 @@ export class GuiEventStore {
       pendingPermission: undefined,
       pendingQuestion: undefined,
       processing: false,
+      queueSize: 0,
       terminalOutput: '',
       thinkingText: '',
       tools: [],
@@ -264,6 +282,7 @@ export class GuiEventStore {
       error: undefined,
       messages: next,
       processing: false,
+      queueSize: 0,
       thinkingText: '',
       tools: [],
     };

@@ -190,12 +190,16 @@
           <input-group-actions gap="6">
             <badge variant="secondary">{backendLabel}</badge>
             <badge variant="secondary">{modeLabel}</badge>
+            <if test="{hasQueuedPrompts}">
+              <badge variant="secondary">{queueLabel}</badge>
+            </if>
             <spacer grow="1" />
             <if test="{pending_question}">
               <button icon="send" variant="primary" size="sm" disabled="{sendDisabled}" on-press="send" label="Send Answer">Answer</button>
             </if>
             <else>
             <if test="{processing}">
+              <button icon="plus" variant="primary" size="sm" disabled="{sendDisabled}" on-press="send" label="Queue Message">Queue</button>
               <button icon="x" variant="secondary" size="sm" on-press="cancel" label="Stop Current Turn">Stop</button>
             </if>
             <else>
@@ -239,10 +243,36 @@
             </column>
 
             <column gap="8">
+              <row height="24" cross="center">
+                <text grow="1" foreground="text_muted">Models</text>
+                <button size="sm" variant="ghost" on-press="command_models">All</button>
+              </row>
+              <if test="{hasModels}">
+                <scroll height="128" label="Runtime models">
+                  <column gap="3">
+                    <for each="modelItems" key="key" as="runtimeModel">
+                      <list-item icon="circle-dot" selected="{runtimeModel.selected}" on-press="select_model:{runtimeModel.key}" label="Select model">
+                        <column gap="1" grow="1">
+                          <text wrap="true">{runtimeModel.displayName}</text>
+                          <text wrap="true" foreground="text_muted">{runtimeModel.id}</text>
+                        </column>
+                      </list-item>
+                    </for>
+                  </column>
+                </scroll>
+              </if>
+              <else>
+                <panel padding="10">
+                  <text wrap="true" foreground="text_muted">Model list appears after runtime connects.</text>
+                </panel>
+              </else>
+            </column>
+
+            <column gap="8">
               <text foreground="text_muted">Review</text>
               <row gap="6">
-                <button grow="1" size="sm" variant="ghost" on-press="command_models">Models</button>
                 <button grow="1" size="sm" variant="ghost" on-press="command_sessions">Sessions</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_skills">Skills</button>
               </row>
               <row gap="6">
                 <button grow="1" size="sm" variant="ghost" on-press="command_permissions">Permissions</button>
@@ -291,6 +321,9 @@
                 <column gap="2" grow="1">
                   <text>{modelLabel}</text>
                   <text foreground="text_muted">{providerLabel} · {backendLabel} · {modeLabel}</text>
+                  <if test="{hasQueuedPrompts}">
+                    <text foreground="text_muted">{queueLabel}</text>
+                  </if>
                 </column>
               </row>
             </column>

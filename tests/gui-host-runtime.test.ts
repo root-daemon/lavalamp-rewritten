@@ -14,6 +14,7 @@ class FakeProcess implements GuiProcess {
   onPermissionRequest?: GuiProcess['onPermissionRequest'];
   onQuestionRequest?: GuiProcess['onQuestionRequest'];
   onBashStream?: GuiProcess['onBashStream'];
+  prompts: string[] = [];
   permissionResponses: Array<[string, PermissionDecision, boolean | undefined]> = [];
   questionResponses: Array<[string, Record<string, unknown>]> = [];
   started = false;
@@ -24,15 +25,16 @@ class FakeProcess implements GuiProcess {
   }
 
   prompt(
-    _message: string,
+    message: string,
     callbacks: RuntimeCallbacks,
     _sessionId?: string,
     images?: PromptImage[],
   ): string {
+    this.prompts.push(message);
     this.callbacks = callbacks;
     this.images = images;
     callbacks.onStarted?.();
-    return 'request-1';
+    return `request-${this.prompts.length}`;
   }
 
   sendPermissionResponse(
@@ -189,6 +191,40 @@ describe('GUI runtime adapter', () => {
         type: 'image',
       },
     ]);
+  });
+
+  test('queues prompts while a turn is running and drains them in order', async () => {
+    const process = new FakeProcess();
+    const store = new GuiEventStore();
+    const runtime = new GuiRuntime({ process, store });
+    await runtime.start({ workspace: '/repo' });
+
+    expect(runtime.submitPrompt('First turn', 'session-1')).toBe('request-1');
+    expect(runtime.submitPrompt('Second turn', 'session-1')).toBe('queued-1');
+    expect(store.snapshot()).toMatchObject({
+      processing: true,
+      queueSize: 1,
+    });
+    expect(process.prompts).toEqual(['First turn']);
+
+    process.callbacks?.onResult?.({
+      model: { id: 'model-a', provider: 'cloudflare' },
+      text: 'Done',
+      usage: {
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: { input: 0, output: 0, total: 0 },
+        input: 0,
+        output: 0,
+        totalTokens: 0,
+      },
+    });
+
+    expect(process.prompts).toEqual(['First turn', 'Second turn']);
+    expect(store.snapshot()).toMatchObject({
+      processing: true,
+      queueSize: 0,
+    });
   });
 
   test('records runtime errors and shuts process down', async () => {
