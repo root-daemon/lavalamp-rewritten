@@ -10,6 +10,7 @@ const MAX_BODY_BYTES = 1024 * 1024;
 export interface GuiHostRuntime {
   readonly store: GuiEventStore;
   submitPrompt(prompt: string, sessionId?: string): string;
+  queuePrompt?(prompt: string, sessionId?: string): string;
   setMode?(mode: RuntimeMode): Promise<void>;
   setBackend?(backend: AgentBackend): Promise<void>;
   setModel?(model: string): Promise<void>;
@@ -22,6 +23,7 @@ export interface GuiHostRuntime {
     answers: Record<string, unknown>,
   ): void;
   cancel(): void;
+  newSession?(): Promise<void>;
   shutdown(): Promise<void>;
 }
 
@@ -113,7 +115,7 @@ export function createGuiHostServer(
 
   return Bun.serve({
     hostname,
-    port: options.port ?? 34_197,
+    port: options.port ?? 0,
     async fetch(request) {
       const url = new URL(request.url);
       if (url.pathname === '/v1/health' && request.method === 'GET') {
@@ -202,6 +204,25 @@ export function createGuiHostServer(
           return success({ requestId }, 202);
         }
 
+        if (url.pathname === '/v1/native/queue' && request.method === 'POST') {
+          const declaredLength = Number(request.headers.get('content-length') ?? '0');
+          if (declaredLength > MAX_BODY_BYTES) {
+            return failure('body_too_large', 'Request body exceeds 1 MiB', 413);
+          }
+          const prompt = await request.text();
+          if (new TextEncoder().encode(prompt).byteLength > MAX_BODY_BYTES) {
+            return failure('body_too_large', 'Request body exceeds 1 MiB', 413);
+          }
+          if (prompt.trim().length === 0) {
+            return failure('invalid_prompt', 'prompt must be non-empty', 400);
+          }
+          if (options.runtime.queuePrompt === undefined) {
+            return failure('queue_unavailable', 'Prompt queue is unavailable', 501);
+          }
+          const sessionId = request.headers.get('x-lavalamp-session') ?? undefined;
+          return success({ requestId: options.runtime.queuePrompt(prompt, sessionId) }, 202);
+        }
+
         if (url.pathname === '/v1/native/commands' && request.method === 'POST') {
           const declaredLength = Number(request.headers.get('content-length') ?? '0');
           if (declaredLength > MAX_BODY_BYTES) {
@@ -245,7 +266,12 @@ export function createGuiHostServer(
           if (sessionId !== undefined && messages == null) {
             return failure('session_not_found', 'Session was not found', 404);
           }
-          options.runtime.store.replaceMessages(messages ?? []);
+          if (sessionId === undefined) {
+            await options.runtime.newSession?.();
+            options.runtime.store.resetConversation();
+          } else {
+            options.runtime.store.replaceMessages(messages ?? []);
+          }
           return success({
             messages: messages ?? [],
             sessionId,

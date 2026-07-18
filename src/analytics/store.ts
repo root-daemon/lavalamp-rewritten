@@ -124,6 +124,18 @@ export class AnalyticsStore {
       .run(rating, id);
   }
 
+  rateLatestRun(workspaceRoot: string, rating: RunRating): boolean {
+    const row = this.db
+      .query(
+        `SELECT id FROM analytics_runs WHERE workspace_id = ?
+         ORDER BY started_at DESC LIMIT 1`,
+      )
+      .get(workspaceHash(workspaceRoot)) as { id?: string } | null;
+    if (row?.id === undefined) return false;
+    this.rateRun(row.id, rating);
+    return true;
+  }
+
   startTurn(input: {
     runId: string;
     role?: AgentRole;
