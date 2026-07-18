@@ -1,0 +1,15 @@
+[dataset]
+name = "local/lavalamp-quality"
+description = "Lavalamp coding-agent quality benchmark"
+keywords = [ "lavalamp", "coding-agent", "typescript",]
+[[dataset.authors]]
+name = "Lavalamp"
+
+
+[[tasks]]
+name = "local/config-precedence"
+digest = "sha256:5e28b84f832bfb2ea53334afed737d49920fdbccec50ebaf49768b599039b607"
+
+[[tasks]]
+name = "local/trial-score-aggregation"
+digest = "sha256:01f6bdf8579a9d691f061beaa394dc9150b2ca0e3a1201b44c04f144b85a7162"

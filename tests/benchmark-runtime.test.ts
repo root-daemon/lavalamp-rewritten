@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   createCustomBenchmark,
   validateCustomBenchmark,
@@ -36,6 +36,12 @@ describe('custom benchmarks', () => {
     expect(readFileSync(join(suite, 'dataset.toml'), 'utf8')).toContain(
       '[[tasks]]',
     );
+    expect(readFileSync(join(suite, 'dataset.toml'), 'utf8')).toContain(
+      'authors = [{ name = "Lavalamp" }]',
+    );
+    expect(readFileSync(join(suite, 'example', 'task.toml'), 'utf8')).toContain(
+      'authors = [{ name = "Lavalamp" }]',
+    );
     expect(validateCustomBenchmark(workspace, suite)).toEqual([]);
   });
 
@@ -48,6 +54,22 @@ describe('custom benchmarks', () => {
     expect(validateCustomBenchmark(workspace, suite)).toContain(
       'Missing dataset.toml',
     );
+  });
+
+  test('ships the Lavalamp quality dataset with two complete tasks', () => {
+    const workspace = resolve(import.meta.dir, '..');
+    const suite = join(workspace, 'benchmarks', 'lavalamp-quality');
+
+    expect(validateCustomBenchmark(workspace, suite)).toEqual([]);
+    expect(readFileSync(join(suite, 'dataset.toml'), 'utf8')).toContain(
+      'name = "local/lavalamp-quality"',
+    );
+    for (const task of ['config-precedence', 'trial-score-aggregation']) {
+      expect(existsSync(join(suite, task, 'solution', 'solve.sh'))).toBe(true);
+      expect(readFileSync(join(suite, task, 'tests', 'test.sh'), 'utf8')).toContain(
+        '/logs/verifier/reward.txt',
+      );
+    }
   });
 });
 

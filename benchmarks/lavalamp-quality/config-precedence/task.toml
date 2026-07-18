@@ -1,0 +1,20 @@
+schema_version = "1.3"
+
+[task]
+name = "local/config-precedence"
+description = "Repair model selection precedence and empty-value handling"
+authors = [{ name = "Lavalamp" }]
+keywords = ["typescript", "configuration", "precedence"]
+
+[agent]
+timeout_sec = 300.0
+
+[verifier]
+timeout_sec = 60.0
+
+[environment]
+network_mode = "no-network"
+build_timeout_sec = 300.0
+cpus = 1
+memory_mb = 1024
+storage_mb = 2048

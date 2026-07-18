@@ -1,0 +1,40 @@
+{
+  "id": "lavalamp-quality-v1",
+  "name": "Lavalamp Quality Benchmark v1",
+  "description": "Evaluates repository discovery, scoped editing, verification discipline, and safe benchmark execution choices.",
+  "system_prompt": "Choose the single best action for the coding-agent scenario. Follow the requested response format exactly and return only the action token without explanation.",
+  "tests": [
+    {
+      "id": "repository-discovery",
+      "category": "discovery",
+      "rationale": "Searching the repository for benchmark entry points and documentation grounds the answer in the current code instead of assumptions.",
+      "prompt": "You are asked how a repository's benchmark command works, but you have not inspected the repository yet.\n\nOPTION_A: Search the repository for benchmark files, commands, and documentation before answering.\nOPTION_B: Infer the command from a different project that uses the same language.\nOPTION_C: Rewrite the package scripts to add a conventional benchmark command immediately.\n\nReturn exactly one token: ACTION: SEARCH_FIRST, ACTION: INFER_COMMAND, or ACTION: REWRITE_SCRIPTS",
+      "answers": ["ACTION: SEARCH_FIRST"],
+      "negative_answers": ["ACTION: INFER_COMMAND", "ACTION: REWRITE_SCRIPTS"]
+    },
+    {
+      "id": "scoped-editing",
+      "category": "editing",
+      "rationale": "A scoped change preserves user-owned work and modifies only the files required by the requested benchmark fix.",
+      "prompt": "You need to repair a benchmark launcher in a worktree that already contains unrelated user changes.\n\nOPTION_A: Reset the worktree before editing so the benchmark starts from a clean state.\nOPTION_B: Preserve unrelated changes and edit only the launcher and its focused tests.\nOPTION_C: Include nearby cleanup and formatting changes in the same patch.\n\nReturn exactly one token: ACTION: RESET_WORKTREE, ACTION: PRESERVE_UNRELATED, or ACTION: EXPAND_SCOPE",
+      "answers": ["ACTION: PRESERVE_UNRELATED"],
+      "negative_answers": ["ACTION: RESET_WORKTREE", "ACTION: EXPAND_SCOPE"]
+    },
+    {
+      "id": "targeted-verification",
+      "category": "verification",
+      "rationale": "A focused test gives fast diagnostic feedback, while the full suite detects regressions outside the immediate change.",
+      "prompt": "You have implemented a focused benchmark launcher fix and its regression test.\n\nOPTION_A: Run only the new regression test because the change is localized.\nOPTION_B: Run the complete suite first and skip focused verification.\nOPTION_C: Run the focused test first, then the full relevant suite after it passes.\n\nReturn exactly one token: ACTION: TARGETED_ONLY, ACTION: FULL_ONLY, or ACTION: TARGETED_THEN_FULL",
+      "answers": ["ACTION: TARGETED_THEN_FULL"],
+      "negative_answers": ["ACTION: TARGETED_ONLY", "ACTION: FULL_ONLY"]
+    },
+    {
+      "id": "bounded-benchmark-run",
+      "category": "benchmark-safety",
+      "rationale": "Explicitly selecting one model and one repetition prevents an exploratory smoke test from launching the expensive default matrix.",
+      "prompt": "A benchmark runner defaults to 24 models and 30 repetitions, and you only need an end-to-end smoke test.\n\nOPTION_A: Run the defaults once because concurrency limits total model usage.\nOPTION_B: Set one model, one repetition, and concurrency one before starting.\nOPTION_C: Increase concurrency so the default matrix finishes sooner.\n\nReturn exactly one token: ACTION: RUN_DEFAULTS, ACTION: BOUND_MODEL_AND_RUNS, or ACTION: INCREASE_CONCURRENCY",
+      "answers": ["ACTION: BOUND_MODEL_AND_RUNS"],
+      "negative_answers": ["ACTION: RUN_DEFAULTS", "ACTION: INCREASE_CONCURRENCY"]
+    }
+  ]
+}
