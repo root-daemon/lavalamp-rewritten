@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GuiEventStore } from '../src/gui-host/event-store';
@@ -427,5 +427,49 @@ describe('GUI host commands', () => {
     const diff = await runGuiCommand(runtime, workspace, '/server.mjs', '/diff tracked.txt');
     expect(diff.rows.join('\n')).toContain('-old');
     expect(diff.rows.join('\n')).toContain('+new');
+  });
+
+  test('renders repository orchestration links and worktrees for GUI review', async () => {
+    const { runtime, workspace } = fixture();
+    spawnSync('git', ['init', '-b', 'feature/gui'], { cwd: workspace });
+    writeFileSync(join(workspace, 'tracked.txt'), 'first\n');
+    spawnSync('git', ['add', 'tracked.txt'], { cwd: workspace });
+    spawnSync(
+      'git',
+      [
+        '-c',
+        'commit.gpgSign=false',
+        '-c',
+        'user.name=Test User',
+        '-c',
+        'user.email=test@example.com',
+        'commit',
+        '-m',
+        'initial commit',
+      ],
+      { cwd: workspace },
+    );
+    spawnSync('git', ['remote', 'add', 'origin', 'git@github.com:owner/repo.git'], {
+      cwd: workspace,
+    });
+
+    const repo = await runGuiCommand(runtime, workspace, '/server.mjs', '/repo');
+    const output = repo.rows.join('\n');
+
+    expect(repo.title).toBe('/repo');
+    expect(output).toContain(`repository: ${realpathSync(workspace)}`);
+    expect(output).toContain('branch: feature/gui');
+    expect(output).toContain('head: ');
+    expect(output).toContain('initial commit');
+    expect(output).toContain('origin: git@github.com:owner/repo.git');
+    expect(output).toContain('github: https://github.com/owner/repo');
+    expect(output).toContain(
+      'pull requests: https://github.com/owner/repo/pulls?q=is%3Apr+head%3Afeature%2Fgui',
+    );
+    expect(output).toContain(
+      'actions: https://github.com/owner/repo/actions?query=branch%3Afeature%2Fgui',
+    );
+    expect(output).toContain('worktrees:');
+    expect(output).toContain('feature/gui');
   });
 });

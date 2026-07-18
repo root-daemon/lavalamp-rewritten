@@ -94,6 +94,10 @@ function parseBranch(line: string): {
   behind: number;
 } {
   const text = line.replace(/^##\s*/, '');
+  const unbornMatch = /^No commits yet on (.+)$/.exec(text);
+  if (unbornMatch !== null) {
+    return { ahead: 0, behind: 0, branch: unbornMatch[1] ?? 'unknown' };
+  }
   const trackingMatch = /^(.*?)\.\.\.([^\s]+)(?:\s+\[(.*)\])?$/.exec(text);
   if (trackingMatch !== null) {
     const flags = trackingMatch[3] ?? '';

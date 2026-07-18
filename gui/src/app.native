@@ -316,6 +316,10 @@
                 <button grow="1" size="sm" variant="secondary" on-press="command_diff">Diff</button>
               </row>
               <row gap="6">
+                <button grow="1" size="sm" variant="secondary" on-press="command_repo">Repo</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_workspace">Workspace</button>
+              </row>
+              <row gap="6">
                 <button grow="1" size="sm" variant="ghost" on-press="command_sessions">Sessions</button>
                 <button grow="1" size="sm" variant="ghost" on-press="command_skills">Skills</button>
               </row>
@@ -327,10 +331,7 @@
                 <button grow="1" size="sm" variant="ghost" on-press="command_analytics">Analytics</button>
                 <button grow="1" size="sm" variant="ghost" on-press="command_benchmarks">Benchmarks</button>
               </row>
-              <row gap="6">
-                <button grow="1" size="sm" variant="ghost" on-press="command_workspace">Workspace</button>
-                <button grow="1" size="sm" variant="ghost" on-press="command_memory">Memory</button>
-              </row>
+              <button grow="1" size="sm" variant="ghost" on-press="command_memory">Memory</button>
               <row gap="6">
                 <button grow="1" size="sm" variant="ghost" on-press="command_mcp">MCP</button>
                 <button grow="1" size="sm" variant="ghost" on-press="command_subagents">Subagents</button>

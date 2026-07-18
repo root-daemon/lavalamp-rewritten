@@ -311,7 +311,7 @@ pub const Model = struct {
         return self.model_storage[0..self.model_len];
     }
     pub fn providerLabel(self: *const Model) []const u8 {
-        if (self.provider_len == 0) return "Connecting";
+        if (self.provider_len == 0) return "Provider pending";
         return self.provider_storage[0..self.provider_len];
     }
     pub fn backendLabel(self: *const Model) []const u8 {
@@ -456,6 +456,7 @@ pub const Msg = union(enum) {
     command_gateway,
     command_rate_helpful,
     command_rate_unhelpful,
+    command_repo,
     command_workspace,
     command_changes,
     command_diff,
@@ -502,6 +503,20 @@ fn hostBinary() []const u8 {
         const value = std.mem.span(raw);
         if (value.len > 0) return value;
     }
+
+    const cwd_candidates = [_][:0]const u8{
+        "bin/lavalamp",
+        "./bin/lavalamp",
+        "../bin/lavalamp",
+        "../../bin/lavalamp",
+        "../../../bin/lavalamp",
+        "../../../../bin/lavalamp",
+        "../../../../../bin/lavalamp",
+    };
+    for (cwd_candidates) |candidate| {
+        if (std.c.access(candidate, std.c.X_OK) == 0) return candidate;
+    }
+
     return "lavalamp";
 }
 
@@ -551,6 +566,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .command_gateway => sendCommand(model, fx, "/gateway", false),
         .command_rate_helpful => sendCommand(model, fx, "/rate helpful", false),
         .command_rate_unhelpful => sendCommand(model, fx, "/rate unhelpful", false),
+        .command_repo => sendCommand(model, fx, "/repo", false),
         .command_workspace => sendCommand(model, fx, "/workspace", false),
         .command_changes => sendCommand(model, fx, "/changes", false),
         .command_diff => sendCommand(model, fx, "/diff", false),
@@ -1171,4 +1187,10 @@ pub fn main(init: std.process.Init) !void {
 
 test {
     _ = @import("tests.zig");
+}
+
+test "host binary resolves repo local launcher when available" {
+    const binary = hostBinary();
+    try std.testing.expect(!std.mem.eql(u8, binary, "lavalamp"));
+    try std.testing.expect(std.mem.endsWith(u8, binary, "bin/lavalamp"));
 }
