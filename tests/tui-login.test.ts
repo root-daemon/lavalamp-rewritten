@@ -4,7 +4,7 @@ import { loginFromTui, type TuiLoginProgress } from '../src/tui/login.ts';
 
 describe('TUI login', () => {
   test('advertises /login in slash-command help', () => {
-    expect(HELP_COMMANDS).toContainEqual(['/login', 'Log in to the active backend']);
+    expect(HELP_COMMANDS).toContainEqual(['/login', 'Log in to Cloudflare or Codex']);
   });
 
   test('opens Codex browser auth and waits for completion', async () => {
