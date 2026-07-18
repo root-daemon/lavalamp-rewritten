@@ -59,9 +59,22 @@ export interface GuiProcess {
 
 export interface GuiRuntimeOptions {
   process: GuiProcess;
+  processFactory?: GuiProcessFactory;
   store: GuiEventStore;
   subAgentManager?: GuiSubAgentManager;
 }
+
+interface GuiProcessFactoryOptions {
+  agentName: string;
+  allowModelFallback?: boolean;
+  backend: AgentBackend;
+  cwd: string;
+  model?: string;
+  serverPath: string;
+  sessionId?: string;
+}
+
+type GuiProcessFactory = (options: GuiProcessFactoryOptions) => GuiProcess;
 
 export interface GuiSubAgentManager {
   onUpdate?: (subs: SubAgent[]) => void;
@@ -80,8 +93,9 @@ export interface GuiUndoResult {
 export class GuiRuntime {
   private process: GuiProcess;
   readonly store: GuiEventStore;
+  private readonly processFactory: GuiProcessFactory;
   private readonly serverPath?: string;
-  private readonly workspace?: string;
+  private workspace?: string;
   private backend: AgentBackend;
   private mode: RuntimeMode;
   private model?: string;
@@ -110,6 +124,7 @@ export class GuiRuntime {
     workspace?: string;
   }) {
     this.process = options.process;
+    this.processFactory = options.processFactory ?? createRuntimeProcess;
     this.store = options.store;
     this.backend = options.backend ?? options.process.backend ?? 'flue';
     this.mode = options.mode ?? 'build';
@@ -165,6 +180,7 @@ export class GuiRuntime {
   }
 
   async start(options: { workspace: string; model?: string }): Promise<void> {
+    this.workspace = options.workspace;
     this.wireProcess();
     await this.process.start();
     this.store.append({
@@ -174,6 +190,62 @@ export class GuiRuntime {
       type: 'host.ready',
       workspace: options.workspace,
     });
+  }
+
+  workspaceRoot(): string | undefined {
+    return this.workspace;
+  }
+
+  async switchWorkspace(workspace: string): Promise<void> {
+    const nextWorkspace = workspace.trim();
+    if (nextWorkspace.length === 0) {
+      throw new Error('Workspace path is required');
+    }
+    if (nextWorkspace === this.workspace) {
+      return;
+    }
+    if (this.store.snapshot().processing) {
+      throw new Error('Cannot switch worktree while a turn is running');
+    }
+    if (this.serverPath === undefined) {
+      throw new Error('Runtime factory is unavailable');
+    }
+
+    this.clearPromptQueue();
+    this.stopSubagents();
+    await this.process.shutdown();
+    this.analytics?.finish('completed');
+    this.analytics?.close();
+
+    this.workspace = nextWorkspace;
+    this.sessionId = `session_${Date.now()}`;
+    this.backupHistory = [];
+    this.turnBackupId = null;
+    this.imageAttachments = [];
+    this.imageCounter = 0;
+    try {
+      this.backupEngine = new BackupEngine(nextWorkspace);
+    } catch {
+      this.backupEngine = undefined;
+    }
+    this.analytics = AnalyticsRecorder.create({
+      agent: modeToAgentName(this.mode),
+      conversationSessionId: this.sessionId,
+      mode: this.mode,
+      workspaceRoot: nextWorkspace,
+    });
+    this.process = this.createProcess(nextWorkspace, this.backend, this.model, this.sessionId);
+    this.wireProcess();
+    await this.process.start();
+    this.store.resetConversation();
+    this.store.append({
+      backend: this.backend,
+      mode: this.mode,
+      model: this.model,
+      type: 'host.ready',
+      workspace: nextWorkspace,
+    });
+    this.configureSubagents();
   }
 
   private wireProcess(): void {
@@ -534,15 +606,7 @@ export class GuiRuntime {
           mode: this.mode,
           workspaceRoot: this.workspace,
         });
-    this.process = createRuntimeProcess({
-      agentName: modeToAgentName(this.mode),
-      allowModelFallback: backend === 'codex',
-      backend,
-      cwd: this.workspace,
-      model: nextModel,
-      serverPath: this.serverPath,
-      sessionId: this.sessionId,
-    });
+    this.process = this.createProcess(this.workspace, backend, nextModel, this.sessionId);
     this.wireProcess();
     await this.process.start();
     this.store.resetConversation();
@@ -671,6 +735,26 @@ export class GuiRuntime {
         restoreError: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  private createProcess(
+    workspace: string,
+    backend: AgentBackend,
+    model: string | undefined,
+    sessionId: string | undefined,
+  ): GuiProcess {
+    if (this.serverPath === undefined) {
+      throw new Error('Runtime factory is unavailable');
+    }
+    return this.processFactory({
+      agentName: modeToAgentName(this.mode),
+      allowModelFallback: backend === 'codex',
+      backend,
+      cwd: workspace,
+      model,
+      serverPath: this.serverPath,
+      sessionId,
+    });
   }
 }
 

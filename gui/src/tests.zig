@@ -136,6 +136,31 @@ test "sending while a question is pending answers the runtime question" {
     try testing.expectEqualStrings("{\"answers\":{\"choice\":\"yes \\\"ship\\\"\\nnow\"}}", request.body);
 }
 
+test "selecting a worktree sends a switch command through native host" {
+    var model = main.initialModel();
+    model.connected = true;
+    model.host_port = 34197;
+    model.setAuthToken("token-123");
+    model.repo_worktree_count = 1;
+    model.repo_worktrees[0].id = 42;
+    model.repo_worktrees[0].branch_len = 13;
+    @memcpy(model.repo_worktrees[0].branch_storage[0..13], "task/gui-lane");
+    model.repo_worktrees[0].path_len = 10;
+    @memcpy(model.repo_worktrees[0].path_storage[0..10], "/tmp/lane1");
+
+    var fx = main.Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+
+    main.update(&model, .{ .select_worktree = 42 }, &fx);
+
+    try testing.expectEqual(@as(usize, 1), fx.pendingFetchCount());
+    const request = fx.pendingFetchAt(0).?;
+    try testing.expectEqual(std.http.Method.POST, request.method);
+    try testing.expect(std.mem.endsWith(u8, request.url, "/v1/native/commands"));
+    try testing.expectEqualStrings("/worktree switch task/gui-lane", request.body);
+}
+
 test "composer edit and submit dispatch through native markup" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

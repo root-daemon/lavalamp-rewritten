@@ -11,6 +11,7 @@ const MAX_BODY_BYTES = 1024 * 1024;
 
 export interface GuiHostRuntime {
   readonly store: GuiEventStore;
+  workspaceRoot?(): string | undefined;
   submitPrompt(prompt: string, sessionId?: string): string;
   setMode?(mode: RuntimeMode): Promise<void>;
   setBackend?(backend: AgentBackend): Promise<void>;
@@ -109,8 +110,18 @@ export function createGuiHostServer(
   options: GuiHostServerOptions,
 ): Bun.Server<undefined> {
   const hostname = options.hostname ?? '127.0.0.1';
-  const repoStatus = createRepoStatusReader(options.workspace);
-  const workspaceStatus = createWorkspaceStatusReader(options.workspace);
+  let readerWorkspace = activeWorkspace(options);
+  let repoStatus = createRepoStatusReader(readerWorkspace);
+  let workspaceStatus = createWorkspaceStatusReader(readerWorkspace);
+  const readers = () => {
+    const workspace = activeWorkspace(options);
+    if (workspace !== readerWorkspace) {
+      readerWorkspace = workspace;
+      repoStatus = createRepoStatusReader(workspace);
+      workspaceStatus = createWorkspaceStatusReader(workspace);
+    }
+    return { repoStatus, workspaceStatus };
+  };
   if (hostname !== '127.0.0.1' && hostname !== '::1' && hostname !== 'localhost') {
     throw new Error('GUI host must bind to a loopback address');
   }
@@ -121,7 +132,7 @@ export function createGuiHostServer(
     async fetch(request) {
       const url = new URL(request.url);
       if (url.pathname === '/v1/health' && request.method === 'GET') {
-        return success({ ready: true, workspace: options.workspace });
+        return success({ ready: true, workspace: activeWorkspace(options) });
       }
 
       if (request.headers.get('authorization') !== `Bearer ${options.token}`) {
@@ -130,12 +141,13 @@ export function createGuiHostServer(
 
       try {
         if (url.pathname === '/v1/native/snapshot' && request.method === 'GET') {
+          const current = readers();
           return success({
             models: await modelList(options),
-            repoStatus: repoStatus.read(),
+            repoStatus: current.repoStatus.read(),
             sessions: options.listSessions?.() ?? [],
             snapshot: options.runtime.store.snapshot(),
-            workspaceStatus: workspaceStatus.read(),
+            workspaceStatus: current.workspaceStatus.read(),
           });
         }
 
@@ -326,4 +338,10 @@ export function createGuiHostServer(
       }
     },
   });
+}
+
+function activeWorkspace(options: GuiHostServerOptions): string {
+  return options.runtime.workspaceRoot?.()
+    ?? options.runtime.store.snapshot().workspace
+    ?? options.workspace;
 }

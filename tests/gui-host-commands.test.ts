@@ -21,9 +21,12 @@ class FakeProcess implements GuiProcess {
   readonly backend = 'flue' as const;
   isProcessing = false;
   restarted = false;
+  started = false;
   lastCallbacks?: RuntimeCallbacks;
 
-  async start(): Promise<void> {}
+  async start(): Promise<void> {
+    this.started = true;
+  }
 
   prompt(
     _message: string,
@@ -507,7 +510,18 @@ describe('GUI host commands', () => {
   });
 
   test('creates git worktree task lanes through the GUI command path', async () => {
-    const { runtime, workspace } = fixture();
+    const workspace = join(root, 'workspace');
+    const firstProcess = new FakeProcess();
+    const laneProcess = new FakeProcess();
+    const runtime = new GuiRuntime({
+      backend: 'flue',
+      mode: 'build',
+      process: firstProcess,
+      processFactory: () => laneProcess,
+      serverPath: '/server.mjs',
+      store: new GuiEventStore(),
+      workspace,
+    });
     spawnSync('git', ['init', '-b', 'main'], { cwd: workspace });
     writeFileSync(join(workspace, 'tracked.txt'), 'first\n');
     spawnSync('git', ['add', 'tracked.txt'], { cwd: workspace });
@@ -543,5 +557,17 @@ describe('GUI host commands', () => {
 
     const listed = await runGuiCommand(runtime, workspace, '/server.mjs', '/worktree');
     expect(listed.rows.join('\n')).toContain('task/gui-lane');
+
+    const switched = await runGuiCommand(
+      runtime,
+      workspace,
+      '/server.mjs',
+      '/worktree switch task/gui-lane',
+    );
+
+    expect(switched.rows.join('\n')).toContain('switched: task/gui-lane');
+    expect(firstProcess.restarted).toBe(false);
+    expect(laneProcess.started).toBe(true);
+    expect(runtime.workspaceRoot()).toContain('task-gui-lane');
   });
 });

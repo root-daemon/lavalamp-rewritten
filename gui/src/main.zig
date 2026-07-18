@@ -225,6 +225,11 @@ pub const RepoWorktree = struct {
         if (self.head_len > 0) return self.head_storage[0..self.head_len];
         return "linked worktree";
     }
+
+    pub fn switchSelector(self: *const RepoWorktree) []const u8 {
+        if (self.branch_len > 0) return self.branch_storage[0..self.branch_len];
+        return self.path();
+    }
 };
 
 pub const RepoCheck = struct {
@@ -560,6 +565,7 @@ pub const Msg = union(enum) {
     new_chat,
     select_session: u64,
     select_model: u64,
+    select_worktree: u64,
     command_help,
     command_sessions,
     command_models,
@@ -671,6 +677,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         },
         .select_session => |key| selectSession(model, key, fx),
         .select_model => |key| selectModel(model, key, fx),
+        .select_worktree => |key| selectWorktree(model, key, fx),
         .command_help => sendCommand(model, fx, "/help", false),
         .command_sessions => sendCommand(model, fx, "/sessions", false),
         .command_models => sendCommand(model, fx, "/models", false),
@@ -1012,6 +1019,20 @@ fn selectModel(model: *Model, key: u64, fx: *Effects) void {
     if (model_id.len == 0) return;
     var command_buffer: [192]u8 = undefined;
     const command = std.fmt.bufPrint(&command_buffer, "/model {s}", .{model_id}) catch return;
+    sendCommand(model, fx, command, false);
+}
+
+fn selectWorktree(model: *Model, key: u64, fx: *Effects) void {
+    var selector: []const u8 = "";
+    for (model.repo_worktrees[0..model.repo_worktree_count]) |*worktree| {
+        if (worktree.id == key) {
+            selector = worktree.switchSelector();
+            break;
+        }
+    }
+    if (selector.len == 0) return;
+    var command_buffer: [440]u8 = undefined;
+    const command = std.fmt.bufPrint(&command_buffer, "/worktree switch {s}", .{selector}) catch return;
     sendCommand(model, fx, command, false);
 }
 

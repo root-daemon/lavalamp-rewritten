@@ -34,6 +34,7 @@ import {
   createRepoWorktree,
   formatRepoStatusRows,
   readRepoStatus,
+  resolveRepoWorktree,
 } from './repo-status';
 import { GuiRuntime } from './runtime';
 import { createGuiHostServer } from './server';
@@ -129,6 +130,7 @@ export async function runGuiCommand(
   const command = raw.trim();
   const cmd = command.split(/\s+/)[0]?.toLowerCase() ?? '';
   const arg = command.slice(cmd.length).trim();
+  const currentWorkspace = runtime.workspaceRoot() ?? workspace;
   switch (cmd) {
     case '/help':
       return {
@@ -142,7 +144,7 @@ export async function runGuiCommand(
           '',
           'GUI:',
           '/repo          Show repo, branch, remote, worktrees, PR and CI links',
-          '/worktree      Create/list GUI task-lane worktrees',
+          '/worktree      Create/list/switch GUI task-lane worktrees',
           '/changes       Show git branch, changed files, and diff stat',
           '/diff [path]   Show working tree diff',
         ],
@@ -219,7 +221,7 @@ export async function runGuiCommand(
       };
     }
     case '/memory':
-      return readProjectMemory(workspace);
+      return readProjectMemory(currentWorkspace);
     case '/model':
     case '/models': {
       if (arg.length > 0) {
@@ -286,9 +288,9 @@ export async function runGuiCommand(
     }
     case '/benchmark':
     case '/benchmarks':
-      return readBenchmarkSummary(workspace, arg);
+      return readBenchmarkSummary(currentWorkspace, arg);
     case '/gateway':
-      return setOrReadGateway(runtime, workspace, arg);
+      return setOrReadGateway(runtime, currentWorkspace, arg);
     case '/usage': {
       const usage = runtime.store.snapshot().usage;
       return {
@@ -301,22 +303,22 @@ export async function runGuiCommand(
       };
     }
     case '/analytics':
-      return readAnalyticsReport(workspace, arg);
+      return readAnalyticsReport(currentWorkspace, arg);
     case '/rate':
       return rateCurrentRun(runtime, arg);
     case '/workspace':
-      return readWorkspaceSummary(workspace);
+      return readWorkspaceSummary(currentWorkspace);
     case '/repo':
-      return readRepoOverview(workspace);
+      return readRepoOverview(currentWorkspace);
     case '/worktree':
     case '/worktrees':
-      return readOrCreateWorktree(workspace, arg);
+      return readOrCreateWorktree(runtime, currentWorkspace, arg);
     case '/changes':
-      return readGitChanges(workspace);
+      return readGitChanges(currentWorkspace);
     case '/diff':
-      return readGitDiff(workspace, arg);
+      return readGitDiff(currentWorkspace, arg);
     case '/skills': {
-      const skills = discoverSkills(workspace);
+      const skills = discoverSkills(currentWorkspace);
       return {
         title: '/skills',
         rows: skills.length === 0 ? ['No skills found.'] : skills.map((skill) => `#${skill}`),
@@ -329,9 +331,9 @@ export async function runGuiCommand(
     case '/subagents':
       return readSubagents(runtime);
     case '/sudo':
-      return setOrReadSudo(workspace, arg);
+      return setOrReadSudo(currentWorkspace, arg);
     case '/permissions': {
-      const rules = loadRules(workspace);
+      const rules = loadRules(currentWorkspace);
       return {
         title: '/permissions',
         rows: (rules.length > 0 ? rules : getDefaultRules()).map((rule) => {
@@ -396,7 +398,7 @@ export async function runGuiCommand(
     }
     case '/paste-image': {
       const imgPath = await (deps.pasteImageFromClipboard ?? pasteImageFromClipboard)(
-        workspace,
+        currentWorkspace,
       );
       if (imgPath === null || imgPath.length === 0) {
         return {
@@ -531,7 +533,11 @@ function readRepoOverview(workspace: string): GuiCommandResult {
   return { title: '/repo', rows: formatRepoStatusRows(readRepoStatus(workspace)) };
 }
 
-function readOrCreateWorktree(workspace: string, arg: string): GuiCommandResult {
+async function readOrCreateWorktree(
+  runtime: GuiRuntime,
+  workspace: string,
+  arg: string,
+): Promise<GuiCommandResult> {
   const parts = arg.split(/\s+/).filter(Boolean);
   if (parts.length === 0) {
     const status = readRepoStatus(workspace);
@@ -541,15 +547,41 @@ function readOrCreateWorktree(workspace: string, arg: string): GuiCommandResult 
       title: '/worktree',
       rows: [
         'usage: /worktree new <branch> [path]',
+        '       /worktree switch <branch-or-path>',
         '',
         ...(worktreeIndex === -1 ? rows : rows.slice(worktreeIndex)),
+      ],
+    };
+  }
+  if (parts[0] === 'switch' && parts[1] !== undefined) {
+    const selector = arg.slice('switch'.length).trim();
+    const status = readRepoStatus(workspace);
+    const worktree = resolveRepoWorktree(status, selector);
+    if (worktree === undefined) {
+      return {
+        title: '/worktree',
+        rows: [
+          `No worktree matches: ${selector}`,
+          'usage: /worktree switch <branch-or-path>',
+        ],
+      };
+    }
+    await runtime.switchWorkspace(worktree.path);
+    return {
+      title: '/worktree',
+      rows: [
+        `switched: ${worktree.branch ?? worktree.head ?? worktree.path}`,
+        `workspace: ${worktree.path}`,
       ],
     };
   }
   if (parts[0] !== 'new' || parts[1] === undefined) {
     return {
       title: '/worktree',
-      rows: ['usage: /worktree new <branch> [path]'],
+      rows: [
+        'usage: /worktree new <branch> [path]',
+        '       /worktree switch <branch-or-path>',
+      ],
     };
   }
   const result = createRepoWorktree(workspace, parts[1], parts[2]);

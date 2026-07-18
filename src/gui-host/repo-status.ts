@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import type {
   GuiCiCheckSnapshot,
   GuiPullRequestSnapshot,
+  GuiRepoWorktreeSnapshot,
   GuiRepoStatusSnapshot,
 } from './contracts';
 import { workspaceDataDir } from '../storage/paths';
@@ -126,6 +127,30 @@ export function formatRepoStatusRows(status: GuiRepoStatusSnapshot): string[] {
           return `${branchLabel.padEnd(24)} ${worktree.path}${current}`;
         })),
   ];
+}
+
+export function resolveRepoWorktree(
+  status: GuiRepoStatusSnapshot,
+  selector: string,
+): GuiRepoWorktreeSnapshot | undefined {
+  const needle = selector.trim();
+  if (needle.length === 0) return undefined;
+  const normalizedNeedle = normalizePathSelector(needle);
+  return status.worktrees.find((worktree) => {
+    const branch = worktree.branch ?? '';
+    const head = worktree.head ?? '';
+    return (
+      branch === needle ||
+      head === needle ||
+      worktree.path === needle ||
+      normalizePathSelector(worktree.path) === normalizedNeedle ||
+      worktree.path.endsWith(`/${needle}`)
+    );
+  });
+}
+
+function normalizePathSelector(value: string): string {
+  return value.replace(/\/+$/, '');
 }
 
 function checkSummary(checks: GuiCiCheckSnapshot[]): string {

@@ -316,6 +316,39 @@ describe('GUI runtime adapter', () => {
     expect(process.prompts[1]).toContain('## Research Results');
   });
 
+  test('switches runtime workspace with a fresh process and clean GUI session', async () => {
+    const firstProcess = new FakeProcess();
+    const secondProcess = new FakeProcess();
+    const store = new GuiEventStore();
+    const createdWorkspaces: string[] = [];
+    const runtime = new GuiRuntime({
+      backend: 'flue',
+      mode: 'build',
+      process: firstProcess,
+      processFactory: (options) => {
+        createdWorkspaces.push(options.cwd);
+        return secondProcess;
+      },
+      serverPath: '/server.mjs',
+      store,
+      workspace: '/repo',
+    });
+    await runtime.start({ workspace: '/repo' });
+    runtime.store.append({ content: 'old task', type: 'user.message' });
+
+    await runtime.switchWorkspace('/repo-worktree');
+
+    expect(firstProcess.stopped).toBe(true);
+    expect(secondProcess.started).toBe(true);
+    expect(createdWorkspaces).toEqual(['/repo-worktree']);
+    expect(runtime.workspaceRoot()).toBe('/repo-worktree');
+    expect(store.snapshot()).toMatchObject({
+      messages: [],
+      processing: false,
+      workspace: '/repo-worktree',
+    });
+  });
+
   test('records runtime errors and shuts process down', async () => {
     const process = new FakeProcess();
     const store = new GuiEventStore();

@@ -357,7 +357,7 @@
                       <accordion text="Worktrees">
                         <column gap="4">
                           <for each="repoWorktreeItems" key="id" as="worktree">
-                            <list-item icon="circle-dot" selected="{worktree.current}" label="Worktree">
+                            <list-item icon="circle-dot" selected="{worktree.current}" on-press="select_worktree:{worktree.id}" label="Switch worktree">
                               <column gap="1" grow="1">
                                 <text wrap="true">{worktree.branch}</text>
                                 <text wrap="true" foreground="text_muted">{worktree.path}</text>
