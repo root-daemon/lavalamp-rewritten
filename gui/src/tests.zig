@@ -7,7 +7,7 @@ const testing = std.testing;
 test "snapshot JSON populates conversation, tools, sessions, and usage" {
     var model = main.initialModel();
     const body =
-        \\{"ok":true,"data":{"snapshot":{"cursor":9,"processing":true,"assistantText":"Working","thinkingText":"Inspecting repo","terminalOutput":"3 pass\\n","workspace":"/repo","model":"model-a","provider":"cloudflare","usage":{"input":10,"output":5,"cacheRead":2,"cacheWrite":0,"totalTokens":17,"cost":0.03},"messages":[{"role":"user","content":"Fix tests"},{"role":"assistant","content":"Working"}],"tools":[{"id":"tool-1","name":"bash","summary":"bun test","status":"completed","isError":false,"durationMs":20}],"pendingPermission":{"requestId":"perm-1","toolName":"edit","args":{"path":"src/a.ts"}},"pendingQuestion":{"requestId":"question-1","questions":[{"id":"choice","question":"Ship with tests?","type":"input"}]}},"sessions":[{"sessionId":"session-a","prompt":"Fix tests","cwd":"/repo"}],"models":[{"id":"model-a","displayName":"Model A"}],"workspaceStatus":{"git":true,"branch":"main","clean":false,"summary":"2 changed · 1 unstaged · 1 untracked","changes":[{"status":"M","path":"src/main.ts"},{"status":"??","path":"notes.md"}],"diffStat":["src/main.ts | 2 +-","1 file changed, 1 insertion(+), 1 deletion(-)"]}}}
+        \\{"ok":true,"data":{"snapshot":{"cursor":9,"processing":true,"assistantText":"Working","thinkingText":"Inspecting repo","terminalOutput":"3 pass\\n","workspace":"/repo","model":"model-a","provider":"cloudflare","usage":{"input":10,"output":5,"cacheRead":2,"cacheWrite":0,"totalTokens":17,"cost":0.03},"messages":[{"role":"user","content":"Fix tests"},{"role":"assistant","content":"Working"}],"tools":[{"id":"tool-1","name":"bash","summary":"bun test","status":"completed","isError":false,"durationMs":20}],"subagents":[{"id":"sub-1","query":"Audit auth parity","status":"running","pid":1234,"durationMs":2500}],"pendingPermission":{"requestId":"perm-1","toolName":"edit","args":{"path":"src/a.ts"}},"pendingQuestion":{"requestId":"question-1","questions":[{"id":"choice","question":"Ship with tests?","type":"input"}]}},"sessions":[{"sessionId":"session-a","prompt":"Fix tests","cwd":"/repo"}],"models":[{"id":"model-a","displayName":"Model A"}],"workspaceStatus":{"git":true,"branch":"main","clean":false,"summary":"2 changed · 1 unstaged · 1 untracked","changes":[{"status":"M","path":"src/main.ts"},{"status":"??","path":"notes.md"}],"diffStat":["src/main.ts | 2 +-","1 file changed, 1 insertion(+), 1 deletion(-)"]}}}
     ;
 
     try testing.expect(main.applySnapshotJson(&model, body));
@@ -20,6 +20,11 @@ test "snapshot JSON populates conversation, tools, sessions, and usage" {
     try testing.expectEqualStrings("Fix tests", model.messages[0].content());
     try testing.expectEqual(@as(usize, 1), model.tool_count);
     try testing.expectEqualStrings("bun test", model.tools[0].summary());
+    try testing.expectEqual(@as(usize, 1), model.subagent_count);
+    try testing.expectEqualStrings("sub-1", model.subagents[0].name());
+    try testing.expectEqualStrings("Audit auth parity", model.subagents[0].query());
+    try testing.expectEqualStrings("running", model.subagents[0].status());
+    try testing.expectEqualStrings("running · 2s · pid 1234", model.subagents[0].meta());
     try testing.expectEqual(@as(usize, 1), model.session_count);
     try testing.expectEqualStrings("session-a", model.sessions[0].id());
     try testing.expectEqual(@as(usize, 1), model.model_count);

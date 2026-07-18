@@ -338,6 +338,31 @@
             </column>
 
             <column gap="8">
+              <row height="24" cross="center">
+                <text grow="1" foreground="text_muted">Subagents</text>
+                <badge variant="secondary">{subagent_count}</badge>
+              </row>
+              <panel padding="10">
+                <if test="{hasSubagents}">
+                  <timeline gap="7" label="Subagent activity timeline">
+                    <for each="subagentItems" key="id" as="subagent">
+                      <timeline-item title="{subagent.name}" description="{subagent.query}" meta="{subagent.meta}" />
+                    </for>
+                  </timeline>
+                </if>
+                <else>
+                  <column gap="6">
+                    <row gap="8" cross="center">
+                      <icon name="circle-dot" size="sm" />
+                      <text grow="1">No subagents running.</text>
+                    </row>
+                    <text wrap="true" foreground="text_muted">Parallel research appears here when `deploy_parallel_subs` runs.</text>
+                  </column>
+                </else>
+              </panel>
+            </column>
+
+            <column gap="8">
               <text foreground="text_muted">Actions</text>
               <row gap="6">
                 <button grow="1" size="sm" variant="ghost" on-press="command_usage">Usage</button>

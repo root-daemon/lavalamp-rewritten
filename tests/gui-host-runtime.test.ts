@@ -1,11 +1,16 @@
 import { describe, expect, test } from 'bun:test';
 import { GuiEventStore } from '../src/gui-host/event-store';
-import { GuiRuntime, type GuiProcess } from '../src/gui-host/runtime';
+import {
+  GuiRuntime,
+  type GuiProcess,
+  type GuiSubAgentManager,
+} from '../src/gui-host/runtime';
 import type {
   PermissionDecision,
   PromptImage,
 } from '../src/tui/ipc';
 import type { RuntimeCallbacks } from '../src/runtime/types';
+import type { SubAgent } from '../src/tui/state';
 
 class FakeProcess implements GuiProcess {
   callbacks?: RuntimeCallbacks;
@@ -56,6 +61,35 @@ class FakeProcess implements GuiProcess {
 
   async shutdown(): Promise<void> {
     this.stopped = true;
+  }
+}
+
+class FakeSubAgentManager implements GuiSubAgentManager {
+  deployed: string[][] = [];
+  killed = false;
+  onUpdate?: (subs: SubAgent[]) => void;
+  onAllComplete?: (summary: string) => void;
+  private subs: SubAgent[] = [];
+
+  async deploy(queries: string[]): Promise<void> {
+    this.deployed.push(queries);
+    this.subs = queries.map((query, index) => ({
+      id: `sub-${index + 1}`,
+      query,
+      startTime: 1000,
+      status: 'running',
+    }));
+    this.onUpdate?.(this.subs);
+  }
+
+  killAll(): void {
+    this.killed = true;
+    this.subs = this.subs.map((sub) => ({ ...sub, status: 'killed' }));
+    this.onUpdate?.(this.subs);
+  }
+
+  list(): SubAgent[] {
+    return this.subs;
   }
 }
 
@@ -225,6 +259,61 @@ describe('GUI runtime adapter', () => {
       processing: true,
       queueSize: 0,
     });
+  });
+
+  test('deploys TUI parallel subagents and queues their follow-up summary', async () => {
+    const process = new FakeProcess();
+    const subagents = new FakeSubAgentManager();
+    const store = new GuiEventStore();
+    const runtime = new GuiRuntime({
+      backend: 'flue',
+      process,
+      serverPath: '/server.mjs',
+      store,
+      subAgentManager: subagents,
+      workspace: '/repo',
+    });
+    await runtime.start({ workspace: '/repo' });
+
+    runtime.submitPrompt('Investigate parity', 'session-1');
+    process.callbacks?.onEvent?.({
+      result: JSON.stringify({
+        queries: ['auth path', 'model picker', 'workspace diff', 'extra ignored'],
+        type: 'parallel_deploy',
+      }),
+      toolCallId: 'tool-subagents',
+      toolName: 'deploy_parallel_subs',
+      type: 'tool',
+    });
+
+    expect(subagents.deployed).toEqual([
+      ['auth path', 'model picker', 'workspace diff'],
+    ]);
+    expect(store.snapshot().subagents).toMatchObject([
+      { id: 'sub-1', query: 'auth path', status: 'running' },
+      { id: 'sub-2', query: 'model picker', status: 'running' },
+      { id: 'sub-3', query: 'workspace diff', status: 'running' },
+    ]);
+
+    subagents.onAllComplete?.('## Research Results\n\nDone');
+    expect(store.snapshot().queueSize).toBe(1);
+
+    process.callbacks?.onResult?.({
+      backend: 'flue',
+      model: { id: 'model-a', provider: 'cloudflare' },
+      text: 'Original done',
+      usage: {
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: { input: 0, output: 0, total: 0 },
+        input: 0,
+        output: 0,
+        totalTokens: 0,
+      },
+    });
+
+    expect(process.prompts[1]).toContain('The parallel research has completed.');
+    expect(process.prompts[1]).toContain('## Research Results');
   });
 
   test('records runtime errors and shuts process down', async () => {

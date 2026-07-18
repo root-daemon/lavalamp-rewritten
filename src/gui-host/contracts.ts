@@ -45,6 +45,7 @@ export type GuiEventInput =
       isError: boolean;
       durationMs?: number;
     }
+  | { type: 'subagents.updated'; subagents: GuiSubagentSnapshot[] }
   | { type: 'terminal.output'; chunk: string; stream: 'stdout' | 'stderr' }
   | {
       type: 'permission.requested';
@@ -103,6 +104,7 @@ export interface GuiSnapshot {
   usage: GuiUsage;
   messages: GuiMessageSnapshot[];
   tools: GuiToolSnapshot[];
+  subagents: GuiSubagentSnapshot[];
 }
 
 export interface GuiWorkspaceChangeSnapshot {
@@ -138,6 +140,16 @@ export interface GuiToolSnapshot {
   status: 'running' | 'completed' | 'failed';
   isError: boolean;
   durationMs?: number;
+}
+
+export interface GuiSubagentSnapshot {
+  id: string;
+  query: string;
+  status: 'running' | 'done' | 'failed' | 'timed_out' | 'killed';
+  result?: string;
+  error?: string;
+  pid?: number;
+  durationMs: number;
 }
 
 export interface GuiCommandResult {

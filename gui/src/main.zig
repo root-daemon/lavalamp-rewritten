@@ -49,6 +49,7 @@ const max_models = 24;
 const max_command_rows = 48;
 const max_workspace_changes = 16;
 const max_diff_stats = 10;
+const max_subagents = 8;
 
 const Role = enum { user, assistant };
 
@@ -170,6 +171,34 @@ pub const DiffStat = struct {
     }
 };
 
+pub const Subagent = struct {
+    id: u64 = 0,
+    name_storage: [64]u8 = undefined,
+    name_len: usize = 0,
+    query_storage: [360]u8 = undefined,
+    query_len: usize = 0,
+    status_storage: [24]u8 = undefined,
+    status_len: usize = 0,
+    meta_storage: [96]u8 = undefined,
+    meta_len: usize = 0,
+
+    pub fn name(self: *const Subagent) []const u8 {
+        return self.name_storage[0..self.name_len];
+    }
+
+    pub fn query(self: *const Subagent) []const u8 {
+        return self.query_storage[0..self.query_len];
+    }
+
+    pub fn status(self: *const Subagent) []const u8 {
+        return self.status_storage[0..self.status_len];
+    }
+
+    pub fn meta(self: *const Subagent) []const u8 {
+        return self.meta_storage[0..self.meta_len];
+    }
+};
+
 pub const Model = struct {
     pub const view_unbound = .{
         "connected", "cursor", "queue_count", "host_port", "auth_token_storage", "auth_token_len",
@@ -182,7 +211,7 @@ pub const Model = struct {
         "question_body_storage", "messages", "message_count",
         "tools", "tool_count", "sessions", "session_count", "models", "model_count", "selected_session_key", "command_title_storage", "command_title_len",
         "command_rows", "command_row_count", "workspace_changes", "workspace_change_count", "diff_stats", "diff_stat_count", "total_tokens", "total_cost", "assistantText", "authToken",
-        "permissionId", "hasMessages",
+        "permissionId", "hasMessages", "subagents", "subagent_count",
     };
 
     connected: bool = false,
@@ -245,6 +274,8 @@ pub const Model = struct {
     workspace_change_count: usize = 0,
     diff_stats: [max_diff_stats]DiffStat = [_]DiffStat{.{}} ** max_diff_stats,
     diff_stat_count: usize = 0,
+    subagents: [max_subagents]Subagent = [_]Subagent{.{}} ** max_subagents,
+    subagent_count: usize = 0,
     total_tokens: u64 = 0,
     total_cost: f64 = 0,
 
@@ -318,6 +349,9 @@ pub const Model = struct {
     pub fn diffStats(self: *const Model) []const DiffStat {
         return self.diff_stats[0..self.diff_stat_count];
     }
+    pub fn subagentItems(self: *const Model) []const Subagent {
+        return self.subagents[0..self.subagent_count];
+    }
     pub fn messageItems(self: *const Model) []const Message {
         return self.messages[0..self.message_count];
     }
@@ -359,6 +393,9 @@ pub const Model = struct {
     }
     pub fn hasDiffStats(self: *const Model) bool {
         return self.diff_stat_count > 0;
+    }
+    pub fn hasSubagents(self: *const Model) bool {
+        return self.subagent_count > 0;
     }
     pub fn usageLabel(self: *const Model, arena: std.mem.Allocator) []const u8 {
         return std.fmt.allocPrint(arena, "{d} tokens · ${d:.4}", .{ self.total_tokens, self.total_cost }) catch "Usage unavailable";
@@ -487,6 +524,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .new_chat => {
             model.message_count = 0;
             model.tool_count = 0;
+            model.subagent_count = 0;
             model.assistant_len = 0;
             model.thinking_len = 0;
             model.terminal_len = 0;
@@ -868,6 +906,14 @@ const ToolPayload = struct {
     isError: bool = false,
     durationMs: ?u64 = null,
 };
+const SubagentPayload = struct {
+    id: []const u8 = "",
+    query: []const u8 = "",
+    status: []const u8 = "",
+    pid: ?u64 = null,
+    durationMs: u64 = 0,
+    @"error": ?[]const u8 = null,
+};
 const PendingPermissionPayload = struct { requestId: []const u8 = "", toolName: []const u8 = "" };
 const QuestionPayload = struct {
     id: []const u8 = "",
@@ -897,6 +943,7 @@ const SnapshotPayload = struct {
     usage: UsagePayload = .{},
     messages: []const MessagePayload = &.{},
     tools: []const ToolPayload = &.{},
+    subagents: []const SubagentPayload = &.{},
 };
 const SessionPayload = struct { sessionId: []const u8 = "", prompt: []const u8 = "" };
 const ModelPayload = struct { id: []const u8 = "", displayName: []const u8 = "" };
@@ -1007,6 +1054,24 @@ pub fn applySnapshotJson(model: *Model, body: []const u8) bool {
         target.status_len = copyText(&target.status_storage, tool.status);
         target.failed = tool.isError;
         target.duration_ms = tool.durationMs orelse 0;
+    }
+
+    model.subagent_count = @min(snapshot.subagents.len, max_subagents);
+    for (snapshot.subagents[0..model.subagent_count], 0..) |subagent, index| {
+        const target = &model.subagents[index];
+        target.id = std.hash.Wyhash.hash(0, subagent.id);
+        target.name_len = copyText(&target.name_storage, subagent.id);
+        target.query_len = copyText(&target.query_storage, subagent.query);
+        target.status_len = copyText(&target.status_storage, subagent.status);
+        var meta_buffer: [96]u8 = undefined;
+        const seconds = subagent.durationMs / 1000;
+        const meta = if (subagent.@"error") |error_text|
+            std.fmt.bufPrint(&meta_buffer, "{s} · {d}s · {s}", .{ subagent.status, seconds, error_text }) catch subagent.status
+        else if (subagent.pid) |pid|
+            std.fmt.bufPrint(&meta_buffer, "{s} · {d}s · pid {d}", .{ subagent.status, seconds, pid }) catch subagent.status
+        else
+            std.fmt.bufPrint(&meta_buffer, "{s} · {d}s", .{ subagent.status, seconds }) catch subagent.status;
+        target.meta_len = copyText(&target.meta_storage, meta);
     }
 
     model.session_count = @min(data.sessions.len, max_sessions);

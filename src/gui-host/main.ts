@@ -270,7 +270,7 @@ export async function runGuiCommand(
     case '/tools':
       return readRegisteredTools(serverPath);
     case '/subagents':
-      return { title: '/subagents', rows: ['No subagents.'] };
+      return readSubagents(runtime);
     case '/sudo':
       return setOrReadSudo(workspace, arg);
     case '/permissions': {
@@ -350,6 +350,22 @@ export async function runGuiCommand(
     default:
       return { title: cmd || '/command', rows: [`unknown command: ${cmd}`] };
   }
+}
+
+function readSubagents(runtime: GuiRuntime): GuiCommandResult {
+  const subagents = runtime.store.snapshot().subagents;
+  if (subagents.length === 0) {
+    return { title: '/subagents', rows: ['No subagents.'] };
+  }
+  return {
+    title: '/subagents',
+    rows: subagents.map((subagent) => {
+      const pid = subagent.pid === undefined ? '' : ` pid:${subagent.pid}`;
+      const error = subagent.error === undefined ? '' : ` error:${subagent.error}`;
+      const seconds = Math.max(0, Math.round(subagent.durationMs / 1000));
+      return `${subagent.id.padEnd(6)} ${subagent.status.padEnd(9)} ${seconds}s${pid}  ${subagent.query}${error}`;
+    }),
+  };
 }
 
 function runGit(

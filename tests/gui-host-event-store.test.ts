@@ -97,6 +97,32 @@ describe('GUI event store', () => {
     });
   });
 
+  test('tracks live subagents for native rendering and commands', () => {
+    const store = new GuiEventStore({ maxEvents: 10 });
+    store.append({
+      subagents: [
+        {
+          durationMs: 1200,
+          id: 'sub-1',
+          pid: 4242,
+          query: 'Inspect auth runtime',
+          status: 'running',
+        },
+      ],
+      type: 'subagents.updated',
+    });
+
+    expect(store.snapshot().subagents).toEqual([
+      {
+        durationMs: 1200,
+        id: 'sub-1',
+        pid: 4242,
+        query: 'Inspect auth runtime',
+        status: 'running',
+      },
+    ]);
+  });
+
   test('replaces conversation when native GUI opens a saved session', () => {
     const store = new GuiEventStore();
     store.append({ content: 'Current prompt', type: 'user.message' });

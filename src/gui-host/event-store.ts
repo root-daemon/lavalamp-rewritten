@@ -15,6 +15,7 @@ export class GuiEventStore {
     processing: false,
     queueSize: 0,
     messages: [],
+    subagents: [],
     terminalOutput: '',
     thinkingText: '',
     tools: [],
@@ -183,6 +184,12 @@ export class GuiEventStore {
           ),
         };
         break;
+      case 'subagents.updated':
+        this.current = {
+          ...this.current,
+          subagents: event.subagents.slice(-12),
+        };
+        break;
       case 'permission.requested':
         this.current = {
           ...this.current,
@@ -254,6 +261,7 @@ export class GuiEventStore {
       pendingQuestion: undefined,
       processing: false,
       queueSize: 0,
+      subagents: [],
       terminalOutput: '',
       thinkingText: '',
       tools: [],
@@ -283,6 +291,7 @@ export class GuiEventStore {
       messages: next,
       processing: false,
       queueSize: 0,
+      subagents: this.current.subagents,
       thinkingText: '',
       tools: [],
     };

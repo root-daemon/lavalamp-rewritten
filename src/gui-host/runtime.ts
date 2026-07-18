@@ -13,7 +13,9 @@ import { resolveConfig } from '../config/user-config';
 import { createRuntimeProcess } from '../runtime/process';
 import type { RuntimeCallbacks, RuntimeMode, RuntimeModel } from '../runtime/types';
 import { AnalyticsRecorder, type RunRating } from '../analytics';
-import type { GuiPermissionDecision } from './contracts';
+import { SubAgentManager } from '../tui/subs';
+import type { SubAgent } from '../tui/state';
+import type { GuiPermissionDecision, GuiSubagentSnapshot } from './contracts';
 import { GuiEventStore } from './event-store';
 
 export interface GuiProcess {
@@ -56,6 +58,15 @@ export interface GuiProcess {
 export interface GuiRuntimeOptions {
   process: GuiProcess;
   store: GuiEventStore;
+  subAgentManager?: GuiSubAgentManager;
+}
+
+export interface GuiSubAgentManager {
+  onUpdate?: (subs: SubAgent[]) => void;
+  onAllComplete?: (summary: string) => void;
+  deploy(queries: string[]): Promise<void>;
+  killAll(): void;
+  list(): SubAgent[];
 }
 
 export class GuiRuntime {
@@ -69,6 +80,8 @@ export class GuiRuntime {
   private sessionId?: string;
   private analytics?: AnalyticsRecorder;
   private activeTurnId?: string;
+  private readonly injectedSubAgentManager?: GuiSubAgentManager;
+  private subManager?: GuiSubAgentManager;
   private imageAttachments: AttachedImage[] = [];
   private imageCounter = 0;
   private promptQueue: Array<{
@@ -93,6 +106,7 @@ export class GuiRuntime {
     this.serverPath = options.serverPath;
     this.sessionId = options.sessionId;
     this.workspace = options.workspace;
+    this.injectedSubAgentManager = options.subAgentManager;
     if (options.workspace !== undefined) {
       this.analytics = AnalyticsRecorder.create({
         agent: modeToAgentName(this.mode),
@@ -101,6 +115,7 @@ export class GuiRuntime {
         workspaceRoot: options.workspace,
       });
     }
+    this.configureSubagents();
   }
 
   static create(options: {
@@ -252,6 +267,9 @@ export class GuiRuntime {
               toolCallId: event.toolCallId ?? 'unknown',
               type: 'tool.completed',
             });
+            if (event.toolName === 'deploy_parallel_subs') {
+              this.deployParallelSubagents(event.result);
+            }
             break;
           default:
             this.store.append({ event, type: 'runtime.event' });
@@ -311,6 +329,84 @@ export class GuiRuntime {
     this.store.append({ type: 'prompt.queue_cleared' });
   }
 
+  private configureSubagents(): void {
+    if (this.subManager !== undefined) {
+      this.stopSubagents();
+    }
+    if (this.backend !== 'flue' || this.workspace === undefined) {
+      return;
+    }
+    const manager = this.injectedSubAgentManager ?? (() => {
+      if (this.serverPath === undefined) return undefined;
+      return new SubAgentManager(
+        this.serverPath,
+        this.workspace,
+        modeToAgentName(this.mode),
+        this.analytics,
+        () => this.activeTurnId,
+      );
+    })();
+    if (manager === undefined) {
+      this.store.append({ subagents: [], type: 'subagents.updated' });
+      return;
+    }
+    manager.onUpdate = (subs) => this.publishSubagents(subs);
+    manager.onAllComplete = (summary) => {
+      this.publishSubagents(manager.list());
+      const followUp = `The parallel research has completed. Here are the findings:\n\n${summary}\n\nPlease analyze these results and continue with your task.`;
+      try {
+        this.submitPrompt(followUp, this.sessionId);
+      } catch (error) {
+        this.store.append({
+          message: `subagent follow-up failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          type: 'turn.failed',
+        });
+      }
+    };
+    this.subManager = manager;
+    this.publishSubagents(manager.list());
+  }
+
+  private stopSubagents(): void {
+    const manager = this.subManager;
+    if (manager === undefined) return;
+    manager.onAllComplete = undefined;
+    manager.onUpdate = undefined;
+    manager.killAll();
+    this.subManager = undefined;
+    this.store.append({ subagents: [], type: 'subagents.updated' });
+  }
+
+  private deployParallelSubagents(result: unknown): void {
+    const marker = parseSubagentDeployMarker(result);
+    if (marker === undefined) return;
+    const manager = this.subManager;
+    if (manager === undefined) {
+      this.store.append({
+        message: 'Subagents require the flue backend.',
+        type: 'notice',
+      });
+      return;
+    }
+    manager.deploy(marker.queries).catch((error: unknown) => {
+      this.store.append({
+        message: `subagents failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        type: 'turn.failed',
+      });
+    });
+  }
+
+  private publishSubagents(subagents: SubAgent[]): void {
+    this.store.append({
+      subagents: subagents.map(toSubagentSnapshot),
+      type: 'subagents.updated',
+    });
+  }
+
   attachImage(path: string): string {
     this.imageCounter += 1;
     const tag = `[Image ${this.imageCounter}]`;
@@ -353,6 +449,7 @@ export class GuiRuntime {
           mode,
           workspaceRoot: this.workspace,
         });
+    this.configureSubagents();
     this.store.append({ mode, type: 'mode.changed' });
   }
 
@@ -384,6 +481,7 @@ export class GuiRuntime {
       ? config.codexModel || undefined
       : config.defaultModel || undefined;
 
+    this.stopSubagents();
     await this.process.shutdown();
     this.backend = backend;
     this.model = nextModel;
@@ -415,6 +513,7 @@ export class GuiRuntime {
       model: nextModel,
       type: 'backend.changed',
     });
+    this.configureSubagents();
   }
 
   async compact(): Promise<void> {
@@ -473,6 +572,7 @@ export class GuiRuntime {
 
   cancel(): void {
     this.clearPromptQueue();
+    this.stopSubagents();
     if (this.store.snapshot().processing) {
       this.process.cancel();
       this.analytics?.finishTurn(this.activeTurnId, 'interrupted');
@@ -486,7 +586,9 @@ export class GuiRuntime {
       throw new Error('Cannot restart while a turn is running');
     }
     this.clearPromptQueue();
+    this.stopSubagents();
     await this.process.restart?.();
+    this.configureSubagents();
   }
 
   rate(rating: RunRating): void {
@@ -496,6 +598,7 @@ export class GuiRuntime {
   async shutdown(): Promise<void> {
     const processing = this.store.snapshot().processing;
     this.clearPromptQueue();
+    this.stopSubagents();
     if (processing) {
       this.analytics?.finishTurn(this.activeTurnId, 'interrupted');
       this.activeTurnId = undefined;
@@ -504,6 +607,46 @@ export class GuiRuntime {
     this.analytics?.close();
     await this.process.shutdown();
   }
+}
+
+function parseSubagentDeployMarker(
+  result: unknown,
+): { queries: string[] } | undefined {
+  const marker =
+    typeof result === 'string'
+      ? (() => {
+          try {
+            return JSON.parse(result) as unknown;
+          } catch {
+            return undefined;
+          }
+        })()
+      : result;
+  if (marker === undefined || marker === null || typeof marker !== 'object') {
+    return undefined;
+  }
+  const candidate = marker as { type?: unknown; queries?: unknown };
+  if (candidate.type !== 'parallel_deploy' || !Array.isArray(candidate.queries)) {
+    return undefined;
+  }
+  const queries = candidate.queries
+    .filter((query): query is string => typeof query === 'string')
+    .map((query) => query.trim())
+    .filter((query) => query.length > 0)
+    .slice(0, 3);
+  return queries.length === 0 ? undefined : { queries };
+}
+
+function toSubagentSnapshot(sub: SubAgent): GuiSubagentSnapshot {
+  return {
+    durationMs: Math.max(0, Date.now() - sub.startTime),
+    error: sub.error,
+    id: sub.id,
+    pid: sub.pid,
+    query: sub.query,
+    result: sub.result,
+    status: sub.status,
+  };
 }
 
 function agentNameToMode(agentName: string): RuntimeMode {
