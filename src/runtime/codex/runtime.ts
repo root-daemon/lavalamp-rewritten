@@ -10,6 +10,8 @@ import type {
   RuntimeMode,
   RuntimeModel,
   RuntimeResult,
+  RuntimeSubagent,
+  RuntimeSubagentInspection,
   RuntimeUsage,
 } from '../types';
 import type {
@@ -166,6 +168,8 @@ export class CodexProcess {
   onQuestionRequest?: (request: QuestionRequestMsg) => void;
   onBashStream?: (chunk: string, stream: 'stdout' | 'stderr') => void;
   onServerRequestResolved?: (requestId: string) => void;
+  onSubagentsChanged?: (subagents: RuntimeSubagent[]) => void;
+  onSubagentsComplete?: (summary: string) => void;
 
   constructor(
     private readonly cwd: string,
@@ -509,6 +513,18 @@ export class CodexProcess {
     this.rejectActive(new Error('Shutting down'));
     await this.terminateChild();
   }
+
+  listSubagents(): RuntimeSubagent[] {
+    return [];
+  }
+
+  async inspectSubagent(id: string): Promise<RuntimeSubagentInspection> {
+    throw new Error(`Subagent not found: ${id}`);
+  }
+
+  async stopSubagent(_id: string): Promise<void> {}
+
+  async deploySubagents(_queries: string[]): Promise<void> {}
 
   private async beginTurn(
     message: string,

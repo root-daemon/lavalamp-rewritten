@@ -6,7 +6,13 @@ import type {
 } from '../tui/ipc';
 import type { AgentBackend } from './backend';
 import { CodexProcess } from './codex/runtime';
-import type { RuntimeCallbacks, RuntimeMode, RuntimeModel } from './types';
+import type {
+  RuntimeCallbacks,
+  RuntimeMode,
+  RuntimeModel,
+  RuntimeSubagent,
+  RuntimeSubagentInspection,
+} from './types';
 
 export interface RuntimeProcess {
   readonly backend: AgentBackend;
@@ -18,6 +24,8 @@ export interface RuntimeProcess {
   onQuestionRequest?: (request: QuestionRequestMsg) => void;
   onBashStream?: (chunk: string, stream: 'stdout' | 'stderr') => void;
   onServerRequestResolved?: (requestId: string) => void;
+  onSubagentsChanged?: (subagents: RuntimeSubagent[]) => void;
+  onSubagentsComplete?: (summary: string) => void;
   start(): Promise<void>;
   prompt(message: string, callbacks?: RuntimeCallbacks, sessionId?: string, images?: PromptImage[]): string;
   cancel(): void;
@@ -37,6 +45,10 @@ export interface RuntimeProcess {
   login?(): Promise<{ authUrl: string; loginId: string }>;
   readAccount?(): Promise<unknown>;
   waitForLogin?(loginId: string): Promise<void>;
+  listSubagents(): RuntimeSubagent[];
+  inspectSubagent(id: string): Promise<RuntimeSubagentInspection>;
+  stopSubagent(id: string): Promise<void>;
+  deploySubagents(queries: string[]): Promise<void>;
 }
 
 export interface CreateRuntimeProcessOptions {
@@ -107,4 +119,11 @@ class FlueRuntimeProcess implements RuntimeProcess {
       }),
     }, sessionId, images);
   }
+
+  listSubagents(): RuntimeSubagent[] { return []; }
+  async inspectSubagent(id: string): Promise<RuntimeSubagentInspection> {
+    throw new Error(`Subagent not found: ${id}`);
+  }
+  async stopSubagent(_id: string): Promise<void> {}
+  async deploySubagents(_queries: string[]): Promise<void> {}
 }

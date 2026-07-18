@@ -57,6 +57,37 @@ export interface RuntimeModel {
   supportedReasoningEfforts: string[];
 }
 
+export type RuntimeSubagentStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'interrupted'
+  | 'stopped';
+
+export interface RuntimeSubagent {
+  id: string;
+  parentId?: string;
+  name: string;
+  role?: string;
+  task: string;
+  status: RuntimeSubagentStatus;
+  result?: string;
+  error?: string;
+  startedAt: number;
+  model?: string;
+}
+
+export interface RuntimeSubagentMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface RuntimeSubagentInspection {
+  subagent: RuntimeSubagent;
+  messages: RuntimeSubagentMessage[];
+}
+
 export interface RuntimeInput {
   text: string;
   images?: string[];
