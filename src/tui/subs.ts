@@ -1,11 +1,16 @@
 import { FlueProcess } from './ipc';
-import type { FlueEvent } from './ipc';
+import type { FlueEvent, FlueResult } from './ipc';
 import type { SubAgent } from './state';
+import type { AnalyticsRecorder } from '../analytics';
 
 export class SubAgentManager {
   private readonly subs = new Map<
     string,
     SubAgent & { process: FlueProcess }
+  >();
+  private readonly analyticsTurns = new Map<
+    string,
+    { recorder: AnalyticsRecorder; turnId: string }
   >();
   private seq = 0;
 
@@ -16,7 +21,17 @@ export class SubAgentManager {
     private readonly serverPath: string,
     private readonly cwd: string,
     private readonly agentName = 'build',
+    private analytics?: AnalyticsRecorder,
+    private parentTurn?: () => string | undefined,
   ) {}
+
+  setAnalytics(
+    analytics: AnalyticsRecorder,
+    parentTurn?: () => string | undefined,
+  ): void {
+    this.analytics = analytics;
+    this.parentTurn = parentTurn;
+  }
 
   async deploy(queries: string[]): Promise<void> {
     for (const query of queries.slice(0, 3)) {
@@ -47,6 +62,10 @@ export class SubAgentManager {
     }
     sub.process.cancel();
     sub.status = 'killed';
+    const analytics = this.analyticsTurns.get(id);
+    analytics?.recorder.finishTurn(analytics.turnId, 'interrupted');
+    analytics?.recorder.event('subagent', 'killed', analytics.turnId);
+    this.analyticsTurns.delete(id);
     this.emitUpdate();
     this.checkComplete();
   }
@@ -86,9 +105,18 @@ export class SubAgentManager {
     this.emitUpdate();
 
     const prompt = `Research the following and provide a detailed, structured summary: ${sub.query}\n\nFocus on: factual accuracy, key findings, relevant code references, and actionable insights.`;
+    const recorder = this.analytics;
+    const analyticsTurn = recorder?.startTurn('subagent', this.parentTurn?.());
+    if (recorder !== undefined && analyticsTurn !== undefined) {
+      this.analyticsTurns.set(sub.id, { recorder, turnId: analyticsTurn });
+    }
+    let stopReason: string | undefined;
     const timeout = setTimeout(() => {
       if (sub.status === 'running') {
         sub.status = 'timed_out';
+        recorder?.finishTurn(analyticsTurn, 'failed');
+        recorder?.event('subagent', 'timed_out', analyticsTurn);
+        this.analyticsTurns.delete(sub.id);
         sub.process.cancel();
         this.emitUpdate();
         this.checkComplete();
@@ -101,14 +129,42 @@ export class SubAgentManager {
         this.fail(sub, error);
       },
       onEvent: (event: FlueEvent) => {
+        if (typeof event.stopReason === 'string') {
+          stopReason = event.stopReason;
+        }
+        if (event.type === 'text_delta' || event.type === 'thinking_delta') {
+          recorder?.firstResponse(analyticsTurn);
+        }
         if (event.type === 'text_delta') {
           sub.result = (sub.result ?? '') + (event.text ?? event.delta ?? '');
           this.emitUpdate();
+        } else if (event.type === 'tool_start') {
+          recorder?.toolStarted(
+            analyticsTurn,
+            event.toolCallId,
+            event.toolName ?? 'unknown',
+            event.args,
+          );
+        } else if (event.type === 'tool') {
+          recorder?.toolFinished(
+            analyticsTurn,
+            event.toolCallId,
+            event.toolName ?? 'unknown',
+            event.durationMs,
+            Boolean(event.isError),
+          );
         }
       },
-      onResult: () => {
+      onResult: (result: FlueResult) => {
         clearTimeout(timeout);
         sub.status = 'done';
+        recorder?.finishTurn(analyticsTurn, 'completed', {
+          model: result.model,
+          stopReason,
+          usage: result.usage,
+        });
+        recorder?.event('subagent', 'completed', analyticsTurn);
+        this.analyticsTurns.delete(sub.id);
         sub.process.shutdown().catch(() => {});
         this.emitUpdate();
         this.checkComplete();
@@ -121,6 +177,10 @@ export class SubAgentManager {
       return;
     }
     sub.status = 'failed';
+    const analytics = this.analyticsTurns.get(sub.id);
+    analytics?.recorder.finishTurn(analytics.turnId, 'failed');
+    analytics?.recorder.event('subagent', 'failed', analytics.turnId);
+    this.analyticsTurns.delete(sub.id);
     sub.error = error instanceof Error ? error.message : String(error);
     sub.process.shutdown().catch(() => {});
     this.emitUpdate();

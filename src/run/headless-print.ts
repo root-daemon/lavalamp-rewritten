@@ -8,7 +8,8 @@ import type { AgentBackend } from '../runtime/backend';
 import { createRuntimeProcess } from '../runtime/process';
 import { saveCodexSession } from '../tui/sessions';
 import { isCodexLoginRequired } from '../runtime/codex/runtime';
-import type { RuntimeResult } from '../runtime/types';
+import type { RuntimeEvent, RuntimeResult } from '../runtime/types';
+import { AnalyticsRecorder } from '../analytics';
 
 export interface PrintOptions {
   backend: AgentBackend;
@@ -52,6 +53,13 @@ export async function runPrint(opts: PrintOptions): Promise<void> {
     process.exit(1);
   }
 
+  const analytics = AnalyticsRecorder.create({
+    agent: opts.agentName ?? 'build',
+    mode: 'print',
+    workspaceRoot: opts.workspaceRoot,
+  });
+  let analyticsTurn: string | undefined;
+
   const flue = createRuntimeProcess({
     agentName: opts.agentName ?? 'build',
     allowModelFallback: opts.allowModelFallback,
@@ -65,16 +73,21 @@ export async function runPrint(opts: PrintOptions): Promise<void> {
   const isTTY = process.stdin.isTTY ?? false;
   const permissionInput =
     isTTY && !opts.autoApprove
-      ? readline.createInterface({ input: process.stdin, output: process.stderr })
+      ? readline.createInterface({
+          input: process.stdin,
+          output: process.stderr,
+        })
       : null;
   let pBashRunning = false;
 
   flue.onPermissionRequest = (request: PermissionRequestMsg) => {
     if (opts.autoApprove) {
+      analytics.event('permission', 'allowed', analyticsTurn);
       flue.sendPermissionResponse(request.requestId, 'allow');
       return;
     }
     if (permissionInput === null) {
+      analytics.event('permission', 'denied', analyticsTurn);
       flue.sendPermissionResponse(request.requestId, 'deny');
       if (!opts.quiet && opts.outputFormat !== 'json') {
         process.stderr.write(
@@ -97,7 +110,15 @@ export async function runPrint(opts: PrintOptions): Promise<void> {
       `\n[lavalamp] ${request.toolName} requests permission:\n${visibleArgs}\nAllow? [y/N] `,
       (answer) => {
         const allow = answer.trim().toLowerCase().startsWith('y');
-        flue.sendPermissionResponse(request.requestId, allow ? 'allow' : 'deny');
+        analytics.event(
+          'permission',
+          allow ? 'allowed' : 'denied',
+          analyticsTurn,
+        );
+        flue.sendPermissionResponse(
+          request.requestId,
+          allow ? 'allow' : 'deny',
+        );
       },
     );
   };
@@ -135,6 +156,8 @@ export async function runPrint(opts: PrintOptions): Promise<void> {
       await flue.resumeThread?.(opts.threadId);
     }
   } catch (error: unknown) {
+    analytics.finish('failed');
+    analytics.close();
     permissionInput?.close();
     const msg = error instanceof Error ? error.message : String(error);
     if (opts.outputFormat === 'json') {
@@ -147,29 +170,66 @@ export async function runPrint(opts: PrintOptions): Promise<void> {
 
   let exitCode = 0;
   const sessionId = opts.sessionId ?? `session_${Date.now()}`;
+  const route =
+    opts.backend === 'flue'
+      ? resolveRuntimeRoute({
+          config: opts.config,
+          env: opts.env,
+          model: opts.model,
+          preferredModel: BUILD_MODEL,
+        })
+      : null;
+  analyticsTurn = analytics.startTurn();
+  let stopReason: string | undefined;
+  const recordEvent = (event: RuntimeEvent) => {
+    if (typeof event.stopReason === 'string') {
+      stopReason = event.stopReason;
+    }
+    if (event.type === 'text_delta' || event.type === 'thinking_delta') {
+      analytics.firstResponse(analyticsTurn);
+    } else if (event.type === 'tool_start') {
+      analytics.toolStarted(
+        analyticsTurn,
+        event.toolCallId,
+        event.toolName ?? 'unknown',
+        event.args,
+      );
+    } else if (event.type === 'tool') {
+      analytics.toolFinished(
+        analyticsTurn,
+        event.toolCallId,
+        event.toolName ?? 'unknown',
+        event.durationMs,
+        Boolean(event.isError),
+      );
+    } else if (event.type === 'compaction_start') {
+      analytics.event('compaction', 'started', analyticsTurn);
+    }
+  };
   if (opts.outputFormat === 'json') {
     let fullText = '';
     let usage: Record<string, unknown> = {};
     let modelInfo: Record<string, unknown> = {};
-    const route = opts.backend === 'flue' ? resolveRuntimeRoute({
-      config: opts.config,
-      env: opts.env,
-      model: opts.model,
-      preferredModel: BUILD_MODEL,
-    }) : null;
-
     exitCode = await new Promise<number>((resolveExit) => {
       const callbacks = withTerminalProgress({
         onError: (err) => {
+          analytics.finishTurn(analyticsTurn, 'failed');
           process.stdout.write(`${JSON.stringify({ error: err.message })}\n`);
           resolveExit(1);
         },
         onEvent: (event) => {
+          recordEvent(event);
           if (event.type === 'text_delta') {
             fullText += event.text ?? event.delta ?? '';
           }
         },
         onResult: (result) => {
+          analytics.finishTurn(analyticsTurn, 'completed', {
+            model: result.model,
+            routeMode: route?.mode,
+            stopReason,
+            usage: result.usage,
+          });
           if (!fullText && typeof result.text === 'string') {
             fullText = result.text;
           }
@@ -217,10 +277,12 @@ export async function runPrint(opts: PrintOptions): Promise<void> {
     exitCode = await new Promise<number>((resolveExit) => {
       const callbacks = withTerminalProgress({
         onError: (err) => {
+          analytics.finishTurn(analyticsTurn, 'failed');
           console.error(`\n  error: ${err.message}`);
           resolveExit(1);
         },
         onEvent: (event) => {
+          recordEvent(event);
           if (event.type === 'text_delta') {
             const delta = event.text ?? event.delta ?? '';
             streamedText += delta;
@@ -240,10 +302,20 @@ export async function runPrint(opts: PrintOptions): Promise<void> {
         },
         onResult: (result) => {
           saveCodexResult(result, sessionId, opts);
+          analytics.finishTurn(analyticsTurn, 'completed', {
+            model: result.model,
+            routeMode: route?.mode,
+            stopReason,
+            usage: result.usage,
+          });
           if (!streamedText && typeof result.text === 'string') {
             process.stdout.write(result.text);
           }
-          if (!opts.quiet && result !== undefined && result.usage !== undefined) {
+          if (
+            !opts.quiet &&
+            result !== undefined &&
+            result.usage !== undefined
+          ) {
             const u = result.usage;
             const modelStr =
               result.model !== undefined
@@ -265,6 +337,8 @@ export async function runPrint(opts: PrintOptions): Promise<void> {
     });
   }
   await flue.shutdown();
+  analytics.finish(exitCode === 0 ? 'completed' : 'failed');
+  analytics.close();
   permissionInput?.close();
   if (exitCode !== 0) {
     process.exit(exitCode);

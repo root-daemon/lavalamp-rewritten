@@ -84,6 +84,7 @@ lavalamp [command/flag]
 | `lavalamp models --backend codex` | List the models and reasoning efforts reported by Codex. |
 | `lavalamp config show` | Print current configuration (default model, AI Gateway status). |
 | `lavalamp config set <key> <value>` | Update settings (e.g. `lavalamp config set model <model-id>`). |
+| `lavalamp analytics` | Show local cost, performance, reliability, tool, and outcome analytics. |
 
 ### CLI Flags
 
@@ -115,6 +116,9 @@ Type these commands directly into the prompt input box:
 * `/plan` - Toggle Plan Mode (changes input bar to a teal accent) to design tasks before building.
 * `/sessions` - Open a list of past sessions to pick one to resume.
 * `/backend` - Show or switch between Flue and Codex while idle; switching starts a clean session.
+* `/usage` - Show token and cost totals for the current conversation.
+* `/analytics [session|7d|30d|90d|all|global]` - Explore persistent developer analytics.
+* `/rate helpful` or `/rate unhelpful` - Optionally rate the current run.
 * `/memory` - View or update the persistent project memory.
 * `/model` - List or switch the active model.
 * `/workspace` - Change the workspace directory.
@@ -131,6 +135,12 @@ lavalamp --sudo -p "fix the failing tests"
 ```
 
 `--sudo` does not elevate Lavalamp to the operating-system root user. It is restricted to `-p`, `--repl`, and `--simple` modes.
+
+### Local analytics
+
+Lavalamp records metadata-only analytics locally in `analytics.db` inside its application data directory. Reports cover token usage and runtime-reported cost, cache efficiency, turn and tool latency, errors, permission decisions, compactions, model routes, validation attempts, subagents, and optional helpful/unhelpful ratings.
+
+Prompts, responses, commands, tool arguments, tool results, and error messages are never written to the analytics database. Use `lavalamp analytics --scope project|global --range 7d|30d|90d|all --format text|json` for headless reporting. Analytics collection starts after upgrading; existing session files are not backfilled.
 
 ### Full-Screen Keybindings
 When viewing large code blocks or file diffs, the TUI opens a full-screen view. You can navigate it using Vim-style bindings:

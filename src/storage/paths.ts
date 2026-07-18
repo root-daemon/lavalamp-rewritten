@@ -115,6 +115,10 @@ export function sessionsDir(): string {
   return path.join(lavalampDataDir(), 'sessions');
 }
 
+export function analyticsPath(): string {
+  return path.join(lavalampDataDir(), 'analytics.db');
+}
+
 export function legacySessionsDir(): string {
   return path.join(legacyAgentsDir(), 'sessions');
 }
@@ -185,7 +189,7 @@ export function skillDirs(workspaceRoot: string): string[] {
   return uniquePaths(dirs);
 }
 
-function workspaceHash(workspaceRoot: string): string {
+export function workspaceHash(workspaceRoot: string): string {
   const resolved = path.resolve(workspaceRoot);
   return createHash('sha256').update(resolved).digest('hex').slice(0, 12);
 }

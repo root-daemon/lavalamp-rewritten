@@ -13,6 +13,7 @@ import type { RuntimeEvent, RuntimeResult } from '../runtime/types';
 import { saveCodexSession } from '../tui/sessions';
 import { resolveRuntimeRoute } from '../config/runtime-route';
 import { isCodexLoginRequired } from '../runtime/codex/runtime';
+import { AnalyticsRecorder } from '../analytics';
 
 export interface ReplOptions {
   backend: AgentBackend;
@@ -36,8 +37,7 @@ function defaultQuestionAnswers(
 ): Record<string, unknown> {
   const answers: Record<string, unknown> = {};
   for (const q of questions) {
-    answers[q.id] =
-      q.default ?? (q.type === 'multiselect' ? [] : '');
+    answers[q.id] = q.default ?? (q.type === 'multiselect' ? [] : '');
   }
   return answers;
 }
@@ -81,6 +81,21 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
     process.exit(1);
   }
 
+  const analytics = AnalyticsRecorder.create({
+    agent: opts.agentName ?? 'build',
+    mode: simple ? 'simple' : 'repl',
+    workspaceRoot: opts.workspaceRoot,
+  });
+  const route =
+    opts.backend === 'flue'
+      ? resolveRuntimeRoute({
+          config: opts.config,
+          env: opts.env,
+          model: opts.model,
+        })
+      : null;
+  let analyticsTurn: string | undefined;
+
   const flue = createRuntimeProcess({
     agentName: opts.agentName ?? 'build',
     allowModelFallback: opts.allowModelFallback,
@@ -120,8 +135,7 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
           flueStarted = true;
         })
         .catch((error: unknown) => {
-          const err =
-            error instanceof Error ? error : new Error(String(error));
+          const err = error instanceof Error ? error : new Error(String(error));
           startupError = err;
           throw err;
         });
@@ -153,10 +167,12 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
 
   flue.onPermissionRequest = (req: PermissionRequestMsg) => {
     if (autoApprove) {
+      analytics.event('permission', 'allowed', analyticsTurn);
       flue.sendPermissionResponse(req.requestId, 'allow');
       return;
     }
     if (!isTTY) {
+      analytics.event('permission', 'denied', analyticsTurn);
       flue.sendPermissionResponse(req.requestId, 'deny');
       if (!opts.quiet && !simple) {
         process.stderr.write(
@@ -170,6 +186,11 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
       : `  [permission] ${req.toolName} — allow? [y/N] `;
     rl.question(prompt, (answer) => {
       const allow = answer.trim().toLowerCase().startsWith('y');
+      analytics.event(
+        'permission',
+        allow ? 'allowed' : 'denied',
+        analyticsTurn,
+      );
       flue.sendPermissionResponse(req.requestId, allow ? 'allow' : 'deny');
     });
   };
@@ -188,18 +209,24 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
       } catch {}
     }
     rl.close();
+    analytics.finish('completed');
+    analytics.close();
     process.exit(0);
   }
 
   function sendTurn(text: string): Promise<void> {
     return new Promise((resolve) => {
       processing = true;
+      analyticsTurn = analytics.startTurn();
+      let stopReason: string | undefined;
       let streamed = '';
       const simpleEvents = createSimpleEventStream((chunk) => {
         process.stdout.write(chunk);
       });
 
       const handleError = (err: Error) => {
+        analytics.finishTurn(analyticsTurn, 'failed');
+        analyticsTurn = undefined;
         if (simple && opts.outputFormat !== 'json') {
           simpleEvents.finish();
         }
@@ -215,6 +242,13 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
       };
 
       const handleResult = (result: RuntimeResult) => {
+        analytics.finishTurn(analyticsTurn, 'completed', {
+          model: result.model,
+          routeMode: route?.mode,
+          stopReason,
+          usage: result.usage,
+        });
+        analyticsTurn = undefined;
         if (opts.backend === 'codex' && result.threadId !== undefined) {
           saveCodexSession({
             version: 2,
@@ -271,6 +305,29 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
       };
 
       const handleEvent = (event: RuntimeEvent) => {
+        if (typeof event.stopReason === 'string') {
+          stopReason = event.stopReason;
+        }
+        if (event.type === 'text_delta' || event.type === 'thinking_delta') {
+          analytics.firstResponse(analyticsTurn);
+        } else if (event.type === 'tool_start') {
+          analytics.toolStarted(
+            analyticsTurn,
+            event.toolCallId,
+            event.toolName ?? 'unknown',
+            event.args,
+          );
+        } else if (event.type === 'tool') {
+          analytics.toolFinished(
+            analyticsTurn,
+            event.toolCallId,
+            event.toolName ?? 'unknown',
+            event.durationMs,
+            Boolean(event.isError),
+          );
+        } else if (event.type === 'compaction_start') {
+          analytics.event('compaction', 'started', analyticsTurn);
+        }
         if (simple && opts.outputFormat !== 'json') {
           if (event.type === 'text_delta') {
             streamed += event.text ?? event.delta ?? '';
@@ -345,7 +402,9 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
         process.stderr.write('  /exit · /quit — leave REPL\n');
         process.stderr.write('  /clear — reset conversation context\n');
         process.stderr.write('  /help — this message\n');
-        process.stderr.write('  Ctrl+C — cancel current turn (or exit when idle)\n');
+        process.stderr.write(
+          '  Ctrl+C — cancel current turn (or exit when idle)\n',
+        );
         process.stderr.write('  Ctrl+D — exit\n');
       }
       if (isTTY) {
@@ -425,6 +484,8 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
         }
       })
       .finally(() => {
+        analytics.finish('completed');
+        analytics.close();
         process.exit(0);
       })
       .catch(() => {
@@ -434,6 +495,9 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
 
   process.on('SIGINT', () => {
     if (processing) {
+      analytics.finishTurn(analyticsTurn, 'interrupted');
+      analytics.event('interruption', 'user', analyticsTurn);
+      analyticsTurn = undefined;
       needsRestart = true;
       flue.cancel();
       flueStarted = false;
