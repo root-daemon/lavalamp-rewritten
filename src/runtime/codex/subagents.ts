@@ -87,10 +87,10 @@ export class CodexSubagentTracker {
       const state = asRecord(states[id]);
       const stateStatus = collabStatus(state.status);
       const message = stringValue(state.message);
-      const status = mergeStatus(
-        existing?.status,
-        stateStatus ?? toolStatus(item.status),
-      );
+      const nextStatus = stateStatus ?? toolStatus(item.status);
+      const status = nextStatus === 'pending' || nextStatus === 'running'
+        ? nextStatus
+        : mergeStatus(existing?.status, nextStatus);
       const isFailure = status === 'failed';
       this.subagents.set(id, {
         id,
@@ -179,7 +179,6 @@ function collabStatus(value: unknown): RuntimeSubagentStatus | undefined {
 function toolStatus(value: unknown): RuntimeSubagentStatus | undefined {
   switch (stringValue(value)) {
     case 'inProgress': return 'running';
-    case 'completed': return 'completed';
     case 'failed': return 'failed';
     default: return undefined;
   }

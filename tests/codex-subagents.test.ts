@@ -83,4 +83,39 @@ describe('Codex subagent tracker', () => {
       'grandchild-1',
     ]);
   });
+
+  test('reopens a completed child when Codex resumes it', () => {
+    const tracker = new CodexSubagentTracker('root-1');
+    tracker.observeCollabItem({
+      agentsStates: { 'child-1': { status: 'completed', message: 'First pass' } },
+      receiverThreadIds: ['child-1'],
+      senderThreadId: 'root-1',
+      status: 'completed',
+      tool: 'wait',
+      type: 'collabAgentToolCall',
+    });
+    tracker.observeCollabItem({
+      agentsStates: { 'child-1': { status: 'running', message: null } },
+      receiverThreadIds: ['child-1'],
+      senderThreadId: 'root-1',
+      status: 'completed',
+      tool: 'resumeAgent',
+      type: 'collabAgentToolCall',
+    });
+
+    expect(tracker.get('child-1')?.status).toBe('running');
+  });
+
+  test('does not treat a completed spawn call as a completed child', () => {
+    const tracker = new CodexSubagentTracker('root-1');
+    tracker.observeCollabItem({
+      receiverThreadIds: ['child-1'],
+      senderThreadId: 'root-1',
+      status: 'completed',
+      tool: 'spawnAgent',
+      type: 'collabAgentToolCall',
+    });
+
+    expect(tracker.get('child-1')?.status).toBe('pending');
+  });
 });

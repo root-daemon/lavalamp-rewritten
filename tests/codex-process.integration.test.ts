@@ -87,6 +87,53 @@ describe('Codex process integration', () => {
     expect(requests).toContain('request:thread/read');
     expect(requests).toContain('request:turn/interrupt');
   });
+
+  test('stops active children before clearing tracked subagents', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'lavalamp-codex-'));
+    tempDirs.push(dir);
+    const executable = join(dir, 'codex');
+    await writeFile(executable, FAKE_CODEX, 'utf8');
+    await chmod(executable, 0o755);
+
+    const runtime = new CodexProcess(dir, { executable, model: 'gpt-test' });
+    await runtime.start();
+    await new Promise<RuntimeResult>((resolve, reject) => {
+      runtime.prompt('delegate', { onError: reject, onResult: resolve });
+    });
+
+    await runtime.clearSubagents();
+
+    expect(runtime.listSubagents()).toEqual([]);
+    const requests = await readFile(join(dir, 'requests.log'), 'utf8');
+    expect(requests).toContain('request:turn/interrupt');
+    await runtime.shutdown();
+  });
+
+  test('keeps pending children visible when Codex has no interruptible turn', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'lavalamp-codex-'));
+    tempDirs.push(dir);
+    const executable = join(dir, 'codex');
+    await writeFile(executable, FAKE_CODEX, 'utf8');
+    await chmod(executable, 0o755);
+
+    const runtime = new CodexProcess(dir, { executable, model: 'gpt-test' });
+    await runtime.start();
+    await new Promise<RuntimeResult>((resolve, reject) => {
+      runtime.prompt('delegate pending', { onError: reject, onResult: resolve });
+    });
+
+    await expect(runtime.stopSubagent('pending-child')).rejects.toThrow(
+      'has no active turn to interrupt',
+    );
+    expect(runtime.listSubagents()).toEqual([
+      expect.objectContaining({ id: 'pending-child', status: 'pending' }),
+    ]);
+    await expect(runtime.clearSubagents()).rejects.toThrow(
+      'has no active turn to interrupt',
+    );
+    expect(runtime.listSubagents()).toHaveLength(1);
+    await runtime.shutdown();
+  });
 });
 
 const FAKE_CODEX = `#!/usr/bin/env bun
@@ -100,6 +147,7 @@ appendFileSync(logPath, 'argv:' + process.argv.slice(2).join(' ') + '\\n');
 
 const decoder = new TextDecoder();
 let buffer = '';
+let pendingMode = false;
 for await (const chunk of Bun.stdin.stream()) {
   buffer += decoder.decode(chunk);
   while (buffer.includes('\\n')) {
@@ -118,15 +166,20 @@ for await (const chunk of Bun.stdin.stream()) {
     } else if (message.method === 'thread/start') {
       result = { thread: { id: 'thread-test', turns: [] }, model: 'gpt-test', modelProvider: 'openai' };
     } else if (message.method === 'turn/start') {
+      pendingMode = message.params.input[0].text.includes('pending');
       result = { turn: { id: 'turn-test' } };
     } else if (message.method === 'thread/read') {
-      result = { thread: { id: 'child-test', parentThreadId: 'thread-test', turns: [{ id: 'child-turn', status: 'inProgress', items: [{ id: 'child-user', type: 'userMessage', content: [{ type: 'text', text: 'Inspect authentication' }] }, { id: 'child-agent', type: 'agentMessage', text: 'Still checking.' }] }] } };
+      result = pendingMode
+        ? { thread: { id: 'pending-child', parentThreadId: 'thread-test', turns: [] } }
+        : { thread: { id: 'child-test', parentThreadId: 'thread-test', turns: [{ id: 'child-turn', status: 'inProgress', items: [{ id: 'child-user', type: 'userMessage', content: [{ type: 'text', text: 'Inspect authentication' }] }, { id: 'child-agent', type: 'agentMessage', text: 'Still checking.' }] }] } };
     }
     console.log(JSON.stringify({ id: message.id, result }));
     if (message.method === 'turn/start') {
       setTimeout(() => {
-        console.log(JSON.stringify({ method: 'thread/started', params: { thread: { id: 'child-test', parentThreadId: 'thread-test', agentNickname: 'Atlas', agentRole: 'explorer', preview: 'Inspect authentication', createdAt: 1, status: { type: 'active', activeFlags: [] }, turns: [] } } }));
-        console.log(JSON.stringify({ method: 'item/started', params: { threadId: 'thread-test', turnId: 'turn-test', item: { id: 'collab-1', type: 'collabAgentToolCall', tool: 'spawnAgent', status: 'inProgress', senderThreadId: 'thread-test', receiverThreadIds: ['child-test'], prompt: 'Inspect authentication', model: 'gpt-test', reasoningEffort: 'medium', agentsStates: { 'child-test': { status: 'running', message: null } } } } }));
+        const childId = pendingMode ? 'pending-child' : 'child-test';
+        const childStatus = pendingMode ? 'pendingInit' : 'running';
+        if (!pendingMode) console.log(JSON.stringify({ method: 'thread/started', params: { thread: { id: childId, parentThreadId: 'thread-test', agentNickname: 'Atlas', agentRole: 'explorer', preview: 'Inspect authentication', createdAt: 1, status: { type: 'active', activeFlags: [] }, turns: [] } } }));
+        console.log(JSON.stringify({ method: 'item/started', params: { threadId: 'thread-test', turnId: 'turn-test', item: { id: 'collab-1', type: 'collabAgentToolCall', tool: 'spawnAgent', status: 'inProgress', senderThreadId: 'thread-test', receiverThreadIds: [childId], prompt: 'Inspect authentication', model: 'gpt-test', reasoningEffort: 'medium', agentsStates: { [childId]: { status: childStatus, message: null } } } } }));
         console.log(JSON.stringify({ method: 'item/agentMessage/delta', params: { threadId: 'thread-test', turnId: 'turn-test', itemId: 'a', delta: 'hello back' } }));
         console.log(JSON.stringify({ method: 'thread/tokenUsage/updated', params: { threadId: 'thread-test', turnId: 'turn-test', tokenUsage: { last: { totalTokens: 5, inputTokens: 3, cachedInputTokens: 1, outputTokens: 2, reasoningOutputTokens: 0 } } } }));
         console.log(JSON.stringify({ method: 'turn/completed', params: { threadId: 'thread-test', turn: { id: 'turn-test', status: 'completed', error: null, items: [] } } }));

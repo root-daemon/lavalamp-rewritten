@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { INPUT_STACK_ORDER, orderedInputStack } from '../src/tui/input-stack.ts';
 import { formatSubagentInspection } from '../src/tui/subagent-inspection.ts';
 import { HELP_COMMANDS } from '../src/tui/slash-data.ts';
-import { handleKeyPress } from '../src/tui/events/Keybindings.ts';
+import { stopFirstRunningSubagent } from '../src/tui/events/Keybindings.ts';
 
 describe('TUI input stack layout', () => {
   test('completion is mounted directly above the input separator and row', () => {
@@ -59,32 +59,19 @@ describe('TUI subagent inspection', () => {
 
   test('advertises subagent inspection in slash help', () => {
     expect(HELP_COMMANDS).toContainEqual([
-      '/subagents [id]',
+      '/subagents',
       'List or inspect subagents',
     ]);
   });
 
   test('stops a running subagent through the runtime callback', () => {
     const stopped: string[] = [];
-    let propagationStopped = false;
-    handleKeyPress({
-      name: 'q',
-      stopPropagation: () => { propagationStopped = true; },
-    } as never, {
-      viewerOverlay: { visible: false },
-      subBox: { isVisible: () => true },
-      questionBox: { isVisible: () => false },
-      permissionBox: { isVisible: () => false },
-      confirmBox: { isVisible: () => false },
-      completion: { isCompleting: () => false },
-      resultPanel: { isVisible: () => false },
-      store: {
-        subAgents: [{ id: 'child-1', status: 'running' }],
-      },
-      stopSubagent: (id: string) => { stopped.push(id); },
-    } as never);
+    const handled = stopFirstRunningSubagent(
+      [{ id: 'child-1', status: 'running' }],
+      (id) => { stopped.push(id); },
+    );
 
     expect(stopped).toEqual(['child-1']);
-    expect(propagationStopped).toBe(true);
+    expect(handled).toBe(true);
   });
 });

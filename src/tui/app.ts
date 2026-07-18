@@ -297,6 +297,9 @@ export async function startTui(options: TuiOptions): Promise<void> {
   });
 
   function wireRuntime(): void {
+    state.subAgents = flue.listSubagents();
+    refreshSubPanel();
+    updateStatus();
     flue.setSubagentAnalytics?.(analytics, () => activeAnalyticsTurn);
     flue.onSubagentsChanged = (subagents) => {
       state.subAgents = subagents;
@@ -365,7 +368,6 @@ export async function startTui(options: TuiOptions): Promise<void> {
       if (questionBoxMgr.isVisible()) questionBoxMgr.hide({});
     };
   }
-  wireRuntime();
   root.flexDirection = 'column';
   root.width = '100%';
   root.height = '100%';
@@ -1025,6 +1027,8 @@ export async function startTui(options: TuiOptions): Promise<void> {
       statusText.fg = sudo ? COLORS.pink : COLORS.gray;
     }
   }
+
+  wireRuntime();
 
   function applyModeVisuals() {
     updatePromptChar();
@@ -2463,6 +2467,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
         if (state.messages.length > 0) {
           saveSessionSnapshot();
         }
+        await flue.clearSubagents();
         for (const child of messagesScroll.getChildren()) {
           if (child.id !== 'lava-lamp-box') {
             child.destroy();
@@ -2472,7 +2477,6 @@ export async function startTui(options: TuiOptions): Promise<void> {
         state.messages = [];
         currentSessionId = `session_${Date.now()}`;
         flue.clearThread?.();
-        await flue.clearSubagents();
         analytics.finish('completed');
         analytics.close();
         analytics = AnalyticsRecorder.create({

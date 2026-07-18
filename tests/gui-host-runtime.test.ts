@@ -8,6 +8,7 @@ import type {
 import type { RuntimeCallbacks } from '../src/runtime/types';
 
 class FakeProcess implements GuiProcess {
+  readonly backend = 'flue' as const;
   callbacks?: RuntimeCallbacks;
   onPermissionRequest?: GuiProcess['onPermissionRequest'];
   onQuestionRequest?: GuiProcess['onQuestionRequest'];
@@ -20,6 +21,8 @@ class FakeProcess implements GuiProcess {
   stopped = false;
   stoppedSubagents: string[] = [];
   deployedQueries: string[][] = [];
+  restartCount = 0;
+  restartBarrier?: Promise<void>;
 
   async start(): Promise<void> {
     this.started = true;
@@ -51,7 +54,14 @@ class FakeProcess implements GuiProcess {
     this.questionResponses.push([requestId, answers]);
   }
 
-  cancel(): void {}
+  cancel(): void {
+    this.callbacks?.onError?.(new Error('Cancelled'));
+  }
+
+  async restart(): Promise<void> {
+    this.restartCount += 1;
+    await this.restartBarrier;
+  }
 
   listSubagents() { return []; }
   async inspectSubagent(id: string) {
@@ -237,6 +247,66 @@ describe('GUI runtime adapter', () => {
     expect(process.callbacks).toBeDefined();
     expect(runtime.store.snapshot().messages.at(-1)?.content).toContain(
       'Both scans passed.',
+    );
+  });
+
+  test('feeds a completed Flue summary back after the parent turn fails', async () => {
+    const process = new FakeProcess();
+    const runtime = new GuiRuntime({ process, store: new GuiEventStore() });
+    await runtime.start({ workspace: '/repo' });
+    runtime.submitPrompt('Compare approaches');
+
+    process.onSubagentsComplete?.('Research survived the failure.');
+    process.callbacks?.onError?.(new Error('parent failed'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(runtime.store.snapshot().messages.at(-1)?.content).toContain(
+      'Research survived the failure.',
+    );
+  });
+
+  test('feeds a completed Flue summary back after the parent turn is cancelled', async () => {
+    const process = new FakeProcess();
+    const runtime = new GuiRuntime({ process, store: new GuiEventStore() });
+    await runtime.start({ workspace: '/repo' });
+    runtime.submitPrompt('Compare approaches');
+
+    process.onSubagentsComplete?.('Research survived cancellation.');
+    runtime.cancel();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(runtime.store.snapshot().messages.at(-1)?.content).toContain(
+      'Research survived cancellation.',
+    );
+    expect(process.restartCount).toBe(1);
+    expect(runtime.store.snapshot().error).toBeUndefined();
+  });
+
+  test('queues a Flue summary that completes while cancellation is restarting', async () => {
+    const process = new FakeProcess();
+    let releaseRestart = () => {};
+    process.restartBarrier = new Promise<void>((resolve) => {
+      releaseRestart = resolve;
+    });
+    const runtime = new GuiRuntime({ process, store: new GuiEventStore() });
+    await runtime.start({ workspace: '/repo' });
+    runtime.submitPrompt('Compare approaches');
+
+    runtime.cancel();
+    process.onSubagentsComplete?.('Research completed during restart.');
+    expect(() => runtime.submitPrompt('Sent too early')).toThrow(
+      'Runtime is restarting',
+    );
+    expect(runtime.store.snapshot().messages.at(-1)?.content).toBe(
+      'Compare approaches',
+    );
+
+    releaseRestart();
+    await process.restartBarrier;
+    await Promise.resolve();
+
+    expect(runtime.store.snapshot().messages.at(-1)?.content).toContain(
+      'Research completed during restart.',
     );
   });
 });

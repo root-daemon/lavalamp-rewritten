@@ -99,7 +99,7 @@ export class SubAgentManager {
 
   kill(id: string): void {
     const sub = this.subs.get(id);
-    if (!sub) {
+    if (sub?.status !== 'running') {
       return;
     }
     sub.process.cancel();
@@ -113,7 +113,7 @@ export class SubAgentManager {
   }
 
   killAll(): void {
-    for (const sub of this.subs.values()) {
+    for (const sub of this.getActive()) {
       this.kill(sub.id);
     }
   }

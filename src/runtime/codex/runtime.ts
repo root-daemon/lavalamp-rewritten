@@ -22,7 +22,7 @@ import type {
 import { assertBackendSupported } from '../backend';
 import { approvalResponse, type ApprovalDecision } from './approvals';
 import { translateCodexNotification } from './events';
-import { reconstructCodexMessages } from './history';
+import { reconstructCodexSubagentMessages } from './history';
 import {
   CodexJsonlPeer,
   type ServerNotification,
@@ -540,11 +540,7 @@ export class CodexProcess {
       threadId: id,
     }));
     const thread = asRecord(response.thread);
-    const messages = reconstructCodexMessages(thread).flatMap((message) =>
-      message.role === 'user' || message.role === 'assistant'
-        ? [{ content: message.content, role: message.role }]
-        : [],
-    );
+    const messages = reconstructCodexSubagentMessages(thread);
     return { messages, subagent };
   }
 
@@ -569,18 +565,35 @@ export class CodexProcess {
       .map(asRecord)
       .toReversed()
       .find((turn) => turn.status === 'inProgress' && typeof turn.id === 'string');
-    if (activeTurn !== undefined) {
-      await this.requirePeer().request('turn/interrupt', {
-        threadId: id,
-        turnId: activeTurn.id,
-      });
+    if (activeTurn === undefined) {
+      this.subagents.observeThreadStatus(id, thread.status);
+      const latest = this.subagents.get(id);
+      if (
+        latest?.status === 'completed' ||
+        latest?.status === 'failed' ||
+        latest?.status === 'interrupted' ||
+        latest?.status === 'stopped'
+      ) {
+        return;
+      }
+      throw new Error(`Subagent ${id} has no active turn to interrupt`);
     }
+    await this.requirePeer().request('turn/interrupt', {
+      threadId: id,
+      turnId: activeTurn.id,
+    });
     this.subagents.markInterrupted(id);
   }
 
   async deploySubagents(_queries: string[]): Promise<void> {}
 
   async clearSubagents(): Promise<void> {
+    const active = this.subagents.list().filter(
+      (subagent) => subagent.status === 'pending' || subagent.status === 'running',
+    );
+    for (const subagent of active) {
+      await this.stopSubagent(subagent.id);
+    }
     this.subagents.clear();
   }
 

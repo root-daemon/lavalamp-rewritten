@@ -33,6 +33,18 @@ export interface KeybindingsContext {
   queuePanelRefresh: () => void;
 }
 
+export function stopFirstRunningSubagent(
+  subagents: ReadonlyArray<{ id: string; status: string }>,
+  stop: (id: string) => void,
+): boolean {
+  const running = subagents.find((subagent) => subagent.status === 'running');
+  if (running === undefined) {
+    return false;
+  }
+  stop(running.id);
+  return true;
+}
+
 export function handleKeyPress(key: KeyEvent, ctx: KeybindingsContext): void {
   const {
     store,
@@ -175,12 +187,8 @@ export function handleKeyPress(key: KeyEvent, ctx: KeybindingsContext): void {
   if (
     key.name === 'q' &&
     subBox.isVisible() &&
-    store.subAgents.some((sub) => sub.status === 'running')
+    stopFirstRunningSubagent(store.subAgents, stopSubagent)
   ) {
-    const first = store.subAgents.find((sub) => sub.status === 'running');
-    if (first) {
-      stopSubagent(first.id);
-    }
     key.stopPropagation();
     return;
   }

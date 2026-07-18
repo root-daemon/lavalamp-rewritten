@@ -6,7 +6,10 @@ import {
   shouldAutoApproveCodexRequest,
 } from '../src/runtime/codex/runtime.ts';
 import { approvalResponse } from '../src/runtime/codex/approvals.ts';
-import { reconstructCodexMessages } from '../src/runtime/codex/history.ts';
+import {
+  reconstructCodexMessages,
+  reconstructCodexSubagentMessages,
+} from '../src/runtime/codex/history.ts';
 
 describe('Codex runtime policy', () => {
   test('parses and gates Codex CLI versions', () => {
@@ -110,5 +113,25 @@ describe('Codex history reconstruction', () => {
       thinking: 'Inspecting',
       toolCalls: [{ id: 'c', name: 'commandExecution', result: { exitCode: 0, output: 'ok', status: 'completed' } }],
     });
+  });
+
+  test('preserves child reasoning and tool activity for read-only inspection', () => {
+    const messages = reconstructCodexSubagentMessages({
+      turns: [{
+        id: 'turn-1',
+        items: [
+          { type: 'userMessage', id: 'u', content: [{ type: 'text', text: 'Inspect it' }] },
+          { type: 'reasoning', id: 'r', summary: ['Checking tests'], content: [] },
+          { type: 'commandExecution', id: 'c', command: 'bun test', cwd: '/repo', status: 'completed', aggregatedOutput: '3 pass', exitCode: 0 },
+          { type: 'agentMessage', id: 'a', text: 'Looks good.' },
+        ],
+      }],
+    });
+
+    expect(messages[0]).toEqual({ role: 'user', content: 'Inspect it' });
+    expect(messages[1]?.content).toContain('Checking tests');
+    expect(messages[1]?.content).toContain('bun test');
+    expect(messages[1]?.content).toContain('3 pass');
+    expect(messages[1]?.content).toContain('Looks good.');
   });
 });

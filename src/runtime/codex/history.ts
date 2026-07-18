@@ -1,4 +1,5 @@
 import type { Message, ToolCall } from '../../tui/state';
+import type { RuntimeSubagentMessage } from '../types';
 
 export function reconstructCodexMessages(thread: unknown): Message[] {
   const turns = readArray(readRecord(thread)?.turns);
@@ -60,6 +61,38 @@ export function reconstructCodexMessages(thread: unknown): Message[] {
   return messages;
 }
 
+export function reconstructCodexSubagentMessages(
+  thread: unknown,
+): RuntimeSubagentMessage[] {
+  return reconstructCodexMessages(thread).flatMap<RuntimeSubagentMessage>((message) => {
+    if (message.role === 'user') {
+      return [{ content: message.content, role: 'user' as const }];
+    }
+    if (message.role !== 'assistant') {
+      return [];
+    }
+    const sections = [message.content.trim()];
+    if (message.thinking?.trim()) {
+      sections.push(`### Reasoning\n\n${message.thinking.trim()}`);
+    }
+    for (const tool of message.toolCalls ?? []) {
+      const command = typeof tool.args.command === 'string'
+        ? `$ ${tool.args.command}`
+        : '';
+      const result = toolResultText(tool.result);
+      sections.push(
+        [`### Tool: ${tool.name}`, command, result]
+          .filter((value) => value.length > 0)
+          .join('\n\n'),
+      );
+    }
+    return [{
+      content: sections.filter((section) => section.length > 0).join('\n\n'),
+      role: 'assistant' as const,
+    }];
+  });
+}
+
 function itemToToolCall(item: Record<string, unknown>, id: string): ToolCall | undefined {
   if (item.type === 'commandExecution') {
     return {
@@ -98,4 +131,18 @@ function readRecord(value: unknown): Record<string, unknown> | undefined {
 
 function readArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
+}
+
+function toolResultText(result: unknown): string {
+  if (typeof result === 'string') {
+    return result;
+  }
+  const record = readRecord(result);
+  if (record !== undefined) {
+    if (typeof record.output === 'string') {
+      return record.output;
+    }
+    return JSON.stringify(record, null, 2);
+  }
+  return result == null ? '' : String(result);
 }
