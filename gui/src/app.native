@@ -302,7 +302,10 @@
                 <button grow="1" size="sm" variant="ghost" on-press="command_gateway">Gateway</button>
                 <button grow="1" size="sm" variant="ghost" on-press="command_paste_image">Paste Image</button>
               </row>
-              <button size="sm" variant="ghost" on-press="command_rate">Rate Last Run</button>
+              <row gap="6">
+                <button grow="1" size="sm" variant="ghost" on-press="command_rate_helpful">Helpful</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_rate_unhelpful">Unhelpful</button>
+              </row>
               <button-group gap="4">
                 <button size="sm" variant="ghost" on-press="command_clear">Clear</button>
                 <button size="sm" variant="ghost" on-press="command_compact">Compact</button>
