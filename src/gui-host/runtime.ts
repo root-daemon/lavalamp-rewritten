@@ -15,6 +15,8 @@ import type { RuntimeCallbacks, RuntimeMode, RuntimeModel } from '../runtime/typ
 import { AnalyticsRecorder, type RunRating } from '../analytics';
 import { SubAgentManager } from '../tui/subs';
 import type { SubAgent } from '../tui/state';
+import { BackupEngine } from '../storage/backups';
+import { planMutationBackup } from '../storage/mutation-backups';
 import type { GuiPermissionDecision, GuiSubagentSnapshot } from './contracts';
 import { GuiEventStore } from './event-store';
 
@@ -69,6 +71,12 @@ export interface GuiSubAgentManager {
   list(): SubAgent[];
 }
 
+export interface GuiUndoResult {
+  removedMessages: number;
+  restoredWorkspace: boolean;
+  restoreError?: string;
+}
+
 export class GuiRuntime {
   private process: GuiProcess;
   readonly store: GuiEventStore;
@@ -82,6 +90,9 @@ export class GuiRuntime {
   private activeTurnId?: string;
   private readonly injectedSubAgentManager?: GuiSubAgentManager;
   private subManager?: GuiSubAgentManager;
+  private backupEngine?: BackupEngine;
+  private backupHistory: string[] = [];
+  private turnBackupId: string | null = null;
   private imageAttachments: AttachedImage[] = [];
   private imageCounter = 0;
   private promptQueue: Array<{
@@ -108,6 +119,11 @@ export class GuiRuntime {
     this.workspace = options.workspace;
     this.injectedSubAgentManager = options.subAgentManager;
     if (options.workspace !== undefined) {
+      try {
+        this.backupEngine = new BackupEngine(options.workspace);
+      } catch {
+        this.backupEngine = undefined;
+      }
       this.analytics = AnalyticsRecorder.create({
         agent: modeToAgentName(this.mode),
         conversationSessionId: options.sessionId,
@@ -215,6 +231,7 @@ export class GuiRuntime {
     sessionId: string | undefined,
     images: PromptImage[],
   ): string {
+    this.turnBackupId = null;
     this.store.append({ content: prompt, type: 'user.message' });
     return this.process.prompt(prompt, {
       onError: (error) => {
@@ -242,6 +259,10 @@ export class GuiRuntime {
             this.analytics?.toolStarted(
               this.activeTurnId,
               event.toolCallId,
+              event.toolName ?? 'unknown',
+              event.args ?? {},
+            );
+            this.createMutationBackup(
               event.toolName ?? 'unknown',
               event.args ?? {},
             );
@@ -407,6 +428,24 @@ export class GuiRuntime {
     });
   }
 
+  private createMutationBackup(
+    name: string,
+    args: Record<string, unknown>,
+  ): void {
+    const backupEngine = this.backupEngine;
+    if (backupEngine === undefined) return;
+    const plan = planMutationBackup(name, args);
+    if (plan === null) return;
+    try {
+      if (this.turnBackupId === null) {
+        this.turnBackupId = backupEngine.createBackup(plan.paths);
+        this.backupHistory.push(this.turnBackupId);
+      } else {
+        backupEngine.extendBackup(this.turnBackupId, plan.paths);
+      }
+    } catch {}
+  }
+
   attachImage(path: string): string {
     this.imageCounter += 1;
     const tag = `[Image ${this.imageCounter}]`;
@@ -527,9 +566,16 @@ export class GuiRuntime {
     this.store.compactMessages();
   }
 
-  async undo(): Promise<void> {
+  async undo(): Promise<GuiUndoResult> {
+    const before = this.store.snapshot().messages.length;
+    const restore = this.restoreLastBackup();
     await this.process.undoLastTurn?.();
     this.store.undoLastTurn();
+    const removedMessages = Math.max(
+      0,
+      before - this.store.snapshot().messages.length,
+    );
+    return { removedMessages, ...restore };
   }
 
   async listModels(): Promise<RuntimeModel[]> {
@@ -606,6 +652,25 @@ export class GuiRuntime {
     this.analytics?.finish(processing ? 'interrupted' : 'completed');
     this.analytics?.close();
     await this.process.shutdown();
+  }
+
+  private restoreLastBackup(): {
+    restoredWorkspace: boolean;
+    restoreError?: string;
+  } {
+    const backupId = this.backupHistory.pop();
+    if (backupId === undefined || this.backupEngine === undefined) {
+      return { restoredWorkspace: false };
+    }
+    try {
+      this.backupEngine.restoreBackup(backupId);
+      return { restoredWorkspace: true };
+    } catch (error) {
+      return {
+        restoredWorkspace: false,
+        restoreError: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 }
 

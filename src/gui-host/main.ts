@@ -366,12 +366,21 @@ export async function runGuiCommand(
         title: '/ask',
         rows: ['mode set: ask'],
       };
-    case '/undo':
-      await runtime.undo();
+    case '/undo': {
+      if (runtime.store.snapshot().messages.length === 0) {
+        return { title: '/undo', rows: ['nothing to undo'] };
+      }
+      const result = await runtime.undo();
+      const restoreMsg = result.restoreError !== undefined
+        ? ` (failed to restore backup: ${result.restoreError})`
+        : result.restoredWorkspace
+          ? ' and restored workspace files'
+          : '';
       return {
         title: '/undo',
-        rows: ['Last turn removed from GUI session.'],
+        rows: [`removed last ${result.removedMessages} messages${restoreMsg}`],
       };
+    }
     case '/paste-image': {
       const imgPath = await (deps.pasteImageFromClipboard ?? pasteImageFromClipboard)(
         workspace,

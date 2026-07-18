@@ -15,7 +15,7 @@ export interface GuiHostRuntime {
   setBackend?(backend: AgentBackend): Promise<void>;
   setModel?(model: string): Promise<void>;
   compact?(): Promise<void>;
-  undo?(): Promise<void>;
+  undo?(): Promise<unknown>;
   listModels?(): Promise<RuntimeModel[]>;
   respondPermission(requestId: string, decision: GuiPermissionDecision): void;
   respondQuestion(

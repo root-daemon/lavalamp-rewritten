@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GuiEventStore } from '../src/gui-host/event-store';
@@ -187,6 +187,46 @@ describe('GUI host commands', () => {
       { content: 'Restore this task', role: 'user' },
       { content: 'Restored answer', role: 'assistant' },
     ]);
+  });
+
+  test('undo restores workspace backup for mutating tool calls', async () => {
+    const { process, runtime, workspace } = fixture();
+    const target = join(workspace, 'tracked.txt');
+    writeFileSync(target, 'before\n');
+
+    runtime.submitPrompt('Change tracked file');
+    process.lastCallbacks?.onEvent?.({
+      args: { path: 'tracked.txt' },
+      toolCallId: 'tool-write',
+      toolName: 'write',
+      type: 'tool_start',
+    });
+    writeFileSync(target, 'after\n');
+    process.lastCallbacks?.onEvent?.({
+      delta: 'Changed file',
+      type: 'text_delta',
+    });
+    process.lastCallbacks?.onResult?.({
+      backend: 'flue',
+      model: { id: 'model-a', provider: 'cloudflare' },
+      text: 'Changed file',
+      usage: {
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: { input: 0, output: 0, total: 0 },
+        input: 0,
+        output: 0,
+        totalTokens: 0,
+      },
+    });
+
+    const undone = await runGuiCommand(runtime, workspace, '/server.mjs', '/undo');
+
+    expect(undone.rows).toEqual([
+      'removed last 2 messages and restored workspace files',
+    ]);
+    expect(readFileSync(target, 'utf8')).toBe('before\n');
+    expect(runtime.store.snapshot().messages).toEqual([]);
   });
 
   test('supports safe sudo state, explicit enable, rating, and subagent output', async () => {
