@@ -58,7 +58,7 @@ export type GuiEventInput =
       requestId: string;
       decision: GuiPermissionDecision;
     }
-  | { type: 'question.requested'; requestId: string; questions: unknown[] }
+  | { type: 'question.requested'; requestId: string; questions: GuiQuestion[] }
   | { type: 'question.resolved'; requestId: string }
   | {
       type: 'turn.completed';
@@ -84,7 +84,15 @@ export interface PendingPermission {
 
 export interface PendingQuestion {
   requestId: string;
-  questions: unknown[];
+  questions: GuiQuestion[];
+}
+
+export interface GuiQuestion {
+  id: string;
+  question: string;
+  type: 'input' | 'select' | 'multiselect';
+  options: string[];
+  defaultValue?: string | string[];
 }
 
 export interface GuiSnapshot {

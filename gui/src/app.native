@@ -1,6 +1,6 @@
 <column background="background">
   <row grow="1">
-    <panel width="284" padding="0">
+    <panel width="252" padding="0">
       <column grow="1">
         <row height="56" padding="14" gap="10" cross="center" window-drag="true">
           <icon name="circle-dot" size="sm" />
@@ -23,8 +23,11 @@
             <column gap="3">
               <if test="{hasSessions}">
                 <for each="sessionItems" key="key" as="session">
-                  <list-item icon="file-text" selected="{session.selected}" on-press="select_session:{session.key}" label="Open session">
-                    <text grow="1" wrap="true">{session.prompt}</text>
+                  <list-item selected="{session.selected}" on-press="select_session:{session.key}" label="Open session">
+                    <row gap="8" cross="center" grow="1">
+                      <icon name="file-text" size="sm" />
+                      <text grow="1" wrap="true">{session.prompt}</text>
+                    </row>
                   </list-item>
                 </for>
               </if>
@@ -58,6 +61,10 @@
         </column>
         <badge variant="secondary">{connectionLabel}</badge>
         <stack>
+          <button icon="panel-right" size="icon" variant="ghost" on-press="toggle_inspector" label="Toggle Inspector"></button>
+          <tooltip anchor="below">Toggle Inspector</tooltip>
+        </stack>
+        <stack>
           <button icon="plus" size="icon" variant="ghost" on-press="new_chat" label="Start New Task"></button>
           <tooltip anchor="below">Start New Task</tooltip>
         </stack>
@@ -67,7 +74,15 @@
       <scroll grow="1" label="Conversation">
         <column padding="24" gap="20">
           <if test="{hasError}">
-            <alert variant="destructive">{errorText}</alert>
+            <alert variant="destructive">
+              <column gap="8" grow="1">
+                <text wrap="true">{errorText}</text>
+                <row gap="6">
+                  <button size="sm" variant="secondary" on-press="retry_connection">Retry</button>
+                  <button size="sm" variant="ghost" on-press="dismiss_error">Dismiss</button>
+                </row>
+              </column>
+            </alert>
           </if>
 
           <if test="{hasCommandResult}">
@@ -75,7 +90,8 @@
               <column gap="10">
                 <row gap="8" cross="center">
                   <icon name="terminal" size="sm" />
-                  <text>{commandTitle}</text>
+                  <text grow="1">{commandTitle}</text>
+                  <button icon="x" size="icon" variant="ghost" on-press="dismiss_command" label="Dismiss Result"></button>
                 </row>
                 <separator />
                 <column gap="5">
@@ -88,11 +104,40 @@
           </if>
 
           <if test="{emptyState}">
-            <column gap="14" main="center" cross="center" grow="1">
+            <column gap="18" main="center" cross="center" grow="1">
               <avatar>LL</avatar>
-              <column gap="5" cross="center">
-                <text>New Task</text>
-                <text foreground="text_muted">{workspaceLabel}</text>
+              <column gap="6" cross="center">
+                <text>What are we building?</text>
+                <text foreground="text_muted">Start with a task or choose a quick launch.</text>
+              </column>
+              <column width="340" gap="7">
+                <list-item on-press="starter_explain" label="Explain codebase">
+                  <row gap="10" cross="center" grow="1">
+                    <icon name="search" size="sm" />
+                    <column gap="2" grow="1">
+                      <text>Explore the codebase</text>
+                      <text wrap="true" foreground="text_muted">Map architecture and find a starting point.</text>
+                    </column>
+                  </row>
+                </list-item>
+                <list-item on-press="starter_tests" label="Run and fix tests">
+                  <row gap="10" cross="center" grow="1">
+                    <icon name="check-circle" size="sm" />
+                    <column gap="2" grow="1">
+                      <text>Run and fix tests</text>
+                      <text wrap="true" foreground="text_muted">Verify the project and repair failures.</text>
+                    </column>
+                  </row>
+                </list-item>
+                <list-item on-press="starter_review" label="Review current changes">
+                  <row gap="10" cross="center" grow="1">
+                    <icon name="eye" size="sm" />
+                    <column gap="2" grow="1">
+                      <text>Review current changes</text>
+                      <text wrap="true" foreground="text_muted">Inspect the active diff for regressions.</text>
+                    </column>
+                  </row>
+                </list-item>
               </column>
               <row gap="6">
                 <badge variant="secondary">{backendLabel}</badge>
@@ -166,6 +211,42 @@
               </column>
             </panel>
           </if>
+
+          <if test="{questionPending}">
+            <panel padding="16">
+              <column gap="12">
+                <row gap="8" cross="center">
+                  <icon name="info" size="sm" />
+                  <column gap="2" grow="1">
+                    <text>Input requested</text>
+                    <text foreground="text_muted">{questionProgressLabel}</text>
+                  </column>
+                </row>
+                <text wrap="true">{currentQuestionText}</text>
+                <if test="{questionIsInput}">
+                  <input text="{questionAnswerText}" placeholder="Type your answer" on-input="question_edit" label="Question answer" />
+                </if>
+                <if test="{questionIsChoice}">
+                  <column gap="4">
+                    <for each="questionOptionItems" key="key" as="option">
+                      <list-item selected="{option.selected}" on-press="question_option:{option.key}" label="Choose answer">
+                        <text grow="1">{option.label}</text>
+                      </list-item>
+                    </for>
+                  </column>
+                </if>
+                <if test="{hasQuestionError}">
+                  <alert variant="destructive"><text wrap="true">{questionErrorText}</text></alert>
+                </if>
+                <row gap="6" main="end">
+                  <if test="{questionHasPrevious}">
+                    <button variant="ghost" on-press="question_back">Back</button>
+                  </if>
+                  <button variant="primary" on-press="question_next">{questionActionLabel}</button>
+                </row>
+              </column>
+            </panel>
+          </if>
         </column>
       </scroll>
 
@@ -175,8 +256,13 @@
           <input-group-actions gap="6">
             <badge variant="secondary">{backendLabel}</badge>
             <badge variant="secondary">{modeLabel}</badge>
+            <stack>
+              <button icon="plus" variant="ghost" size="icon" on-press="command_paste_image" label="Attach Clipboard Image"></button>
+              <tooltip anchor="above">Attach clipboard image</tooltip>
+            </stack>
             <spacer grow="1" />
             <if test="{processing}">
+              <button icon="plus" variant="primary" size="sm" disabled="{queueDisabled}" on-press="queue_prompt" label="Queue Follow-up">Queue</button>
               <button icon="x" variant="secondary" size="sm" on-press="cancel" label="Stop Current Turn">Stop</button>
             </if>
             <else>
@@ -188,9 +274,9 @@
       </column>
     </column>
 
-    <separator />
+    <if test="{inspectorVisible}"><separator /></if>
 
-    <panel width="296" padding="0">
+    <if test="{inspectorVisible}"><panel width="276" padding="0">
       <column grow="1">
         <row height="56" padding="16" cross="center" window-drag="true">
           <text grow="1">Inspector</text>
@@ -203,25 +289,38 @@
             <column gap="8">
               <text foreground="text_muted">Mode</text>
               <button-group gap="4">
-                <button size="sm" variant="secondary" on-press="mode_build">Build</button>
-                <button size="sm" variant="secondary" on-press="mode_ask">Ask</button>
-                <button size="sm" variant="secondary" on-press="mode_plan">Plan</button>
+                <if test="{modeIsBuild}"><button size="sm" variant="primary" on-press="mode_build">Build</button></if><else><button size="sm" variant="ghost" on-press="mode_build">Build</button></else>
+                <if test="{modeIsAsk}"><button size="sm" variant="primary" on-press="mode_ask">Ask</button></if><else><button size="sm" variant="ghost" on-press="mode_ask">Ask</button></else>
+                <if test="{modeIsPlan}"><button size="sm" variant="primary" on-press="mode_plan">Plan</button></if><else><button size="sm" variant="ghost" on-press="mode_plan">Plan</button></else>
               </button-group>
             </column>
 
             <column gap="8">
               <text foreground="text_muted">Provider</text>
               <button-group gap="4">
-                <button size="sm" variant="ghost" on-press="backend_flue">Flue</button>
-                <button size="sm" variant="ghost" on-press="backend_codex">Codex</button>
+                <if test="{backendIsFlue}"><button size="sm" variant="primary" on-press="backend_flue">Flue</button></if><else><button size="sm" variant="ghost" on-press="backend_flue">Flue</button></else>
+                <if test="{backendIsCodex}"><button size="sm" variant="primary" on-press="backend_codex">Codex</button></if><else><button size="sm" variant="ghost" on-press="backend_codex">Codex</button></else>
               </button-group>
             </column>
 
+            <if test="{hasModels}">
+              <column gap="8">
+                <text foreground="text_muted">Model</text>
+                <column gap="3">
+                  <for each="modelChoiceItems" key="key" as="choice">
+                    <list-item selected="{choice.selected}" on-press="select_model:{choice.key}" label="Select model">
+                      <text grow="1" wrap="true">{choice.name}</text>
+                    </list-item>
+                  </for>
+                </column>
+              </column>
+            </if>
+
             <column gap="8">
-              <text foreground="text_muted">Review</text>
+              <text foreground="text_muted">Workspace</text>
               <row gap="6">
-                <button grow="1" size="sm" variant="ghost" on-press="command_models">Models</button>
                 <button grow="1" size="sm" variant="ghost" on-press="command_sessions">Sessions</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_workspace">Details</button>
               </row>
               <row gap="6">
                 <button grow="1" size="sm" variant="ghost" on-press="command_permissions">Permissions</button>
@@ -234,10 +333,14 @@
             </column>
 
             <column gap="8">
-              <text foreground="text_muted">Actions</text>
+              <text foreground="text_muted">Insights</text>
               <row gap="6">
                 <button grow="1" size="sm" variant="ghost" on-press="command_usage">Usage</button>
-                <button grow="1" size="sm" variant="ghost" on-press="command_help">Help</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_memory">Memory</button>
+              </row>
+              <row gap="6">
+                <button grow="1" size="sm" variant="ghost" on-press="command_skills">Skills</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_mcp">MCP</button>
               </row>
               <button-group gap="4">
                 <button size="sm" variant="ghost" on-press="command_compact">Compact</button>
@@ -254,7 +357,7 @@
                 <icon name="circle-dot" size="sm" />
                 <column gap="2" grow="1">
                   <text>{modelLabel}</text>
-                  <text foreground="text_muted">{providerLabel} · {backendLabel} · {modeLabel}</text>
+                  <text foreground="text_muted">{providerLabel} · {modeLabel}</text>
                 </column>
               </row>
             </column>
@@ -319,7 +422,7 @@
           </column>
         </scroll>
       </column>
-    </panel>
+    </panel></if>
   </row>
 
   <separator />

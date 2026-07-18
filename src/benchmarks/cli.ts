@@ -331,6 +331,80 @@ async function runSuite(
   return 0;
 }
 
+async function runDemo(
+  target: string,
+  args: string[],
+  ctx: BenchmarkCliContext,
+): Promise<number> {
+  const path = suitePath(ctx.workspaceRoot, target);
+  const errors = validateCustomBenchmark(ctx.workspaceRoot, path);
+  if (errors.length === 0 && ctx.validateHarbor !== undefined) {
+    errors.push(...(await ctx.validateHarbor(path)));
+  }
+  if (errors.length > 0) {
+    ctx.stderr(errors.join('\n'));
+    return 1;
+  }
+
+  const preflightErrors = ctx.preflight('oracle');
+  if (preflightErrors.length > 0) {
+    ctx.stderr(preflightErrors.join('\n'));
+    return 1;
+  }
+
+  const profile = loadProfile(ctx.workspaceRoot, 'baseline');
+  const runId = `${target.replaceAll(/[^a-zA-Z0-9_-]/g, '-')}-oracle-${Date.now()}`;
+  const outputDir = join(ctx.dataDir, 'demo-jobs');
+  const invocation: HarborInvocation = {
+    args: [
+      'harbor',
+      'run',
+      '--path',
+      path,
+      '--agent',
+      'oracle',
+      '--env',
+      'docker',
+      '--n-concurrent',
+      '1',
+      '--jobs-dir',
+      outputDir,
+      '--job-name',
+      runId,
+      '--yes',
+    ],
+    config: {
+      agentImportPath: 'oracle',
+      benchmark: {
+        id: target,
+        kind: 'path',
+        reference: path,
+        version: 'local',
+      },
+      concurrency: 1,
+      jobName: runId,
+      model: 'oracle',
+      outputDir,
+      profile,
+    },
+    env: {},
+  };
+  const code = await ctx.executeHarbor(invocation);
+  if (code !== 0) {
+    ctx.stderr(`Benchmark demo failed with exit code ${code}`);
+    return code;
+  }
+
+  const resultPath = join(outputDir, runId, 'result.json');
+  writeOutput(
+    ctx,
+    args,
+    { agent: 'oracle', resultPath, suite: target },
+    `Demo completed without model API usage.\nResults: ${resultPath}\nView: harbor view ${JSON.stringify(outputDir)}`,
+  );
+  return 0;
+}
+
 export async function runBenchmarkCli(
   args: string[],
   ctx: BenchmarkCliContext,
@@ -420,6 +494,12 @@ export async function runBenchmarkCli(
         throw new Error('Usage: lavalamp benchmark run <name-or-path>');
       }
       return runSuite(target, args.slice(2), ctx);
+    }
+    if (command === 'demo') {
+      const targetArg = args[1];
+      const hasTarget = targetArg !== undefined && !targetArg.startsWith('-');
+      const target = hasTarget ? targetArg : 'lavalamp-quality';
+      return runDemo(target, args.slice(hasTarget ? 2 : 1), ctx);
     }
     if (command === 'results') {
       const store = new BenchmarkRunStore(join(ctx.dataDir, 'runs'));

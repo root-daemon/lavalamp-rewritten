@@ -144,6 +144,7 @@ USAGE:
   lavalamp --backend BACKEND     Select flue or codex
   lavalamp models                List known models
   lavalamp benchmark list        List public and custom benchmark data
+  lavalamp benchmark demo        Run the bundled safe benchmark demo
   lavalamp benchmark run SUITE   Run a public or custom benchmark
   lavalamp update                Download and install the latest release
   lavalamp config show           Show persisted config

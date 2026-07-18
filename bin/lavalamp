@@ -4,7 +4,7 @@ set -euo pipefail
 # lavalamp — AI coding harness
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="${SCRIPT_DIR}/.."
+REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SERVER_PATH="${REPO_DIR}/dist/server.mjs"
 
 show_help() {
@@ -22,6 +22,8 @@ USAGE:
   lavalamp --model MODEL         Override default model
   lavalamp --backend BACKEND     Select flue or codex
   lavalamp models                List known models
+  lavalamp benchmark demo        Run the bundled safe benchmark demo
+  lavalamp benchmark run SUITE   Run a public or custom benchmark
   lavalamp config show           Show persisted config
   lavalamp config set KEY VALUE  Persist model/Gateway config
 
@@ -77,7 +79,7 @@ show_version() {
 
 # Handle subcommands before flag parsing
 case "${1:-}" in
-  gui|gui-host)
+  gui|gui-host|benchmark|benchmarks)
     exec bun run "${REPO_DIR}/src/run.ts" "$@"
     ;;
   login|logout|status)

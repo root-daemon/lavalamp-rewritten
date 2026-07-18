@@ -47,7 +47,10 @@ const max_messages = 40;
 const max_tools = 24;
 const max_sessions = 16;
 const max_subagents = 16;
+const max_models = 16;
 const max_command_rows = 48;
+const max_questions = 8;
+const max_question_options = 12;
 
 const Role = enum { user, assistant };
 
@@ -139,6 +142,23 @@ pub const Subagent = struct {
     }
 };
 
+pub const ModelChoice = struct {
+    key: u64 = 0,
+    id_storage: [256]u8 = undefined,
+    id_len: usize = 0,
+    name_storage: [256]u8 = undefined,
+    name_len: usize = 0,
+    selected: bool = false,
+
+    pub fn id(self: *const ModelChoice) []const u8 {
+        return self.id_storage[0..self.id_len];
+    }
+
+    pub fn name(self: *const ModelChoice) []const u8 {
+        return self.name_storage[0..self.name_len];
+    }
+};
+
 pub const CommandRow = struct {
     id: u64 = 0,
     storage: [512]u8 = undefined,
@@ -154,6 +174,43 @@ pub const CommandRow = struct {
     }
 };
 
+const QuestionKind = enum { input, select, multiselect };
+
+pub const QuestionOption = struct {
+    key: u64 = 0,
+    storage: [160]u8 = undefined,
+    len: usize = 0,
+    selected: bool = false,
+
+    pub fn label(self: *const QuestionOption) []const u8 {
+        return self.storage[0..self.len];
+    }
+};
+
+pub const Question = struct {
+    id_storage: [96]u8 = undefined,
+    id_len: usize = 0,
+    text_storage: [512]u8 = undefined,
+    text_len: usize = 0,
+    answer_storage: [2048]u8 = undefined,
+    answer_len: usize = 0,
+    kind: QuestionKind = .input,
+    options: [max_question_options]QuestionOption = [_]QuestionOption{.{}} ** max_question_options,
+    option_count: usize = 0,
+
+    fn id(self: *const Question) []const u8 {
+        return self.id_storage[0..self.id_len];
+    }
+
+    fn text(self: *const Question) []const u8 {
+        return self.text_storage[0..self.text_len];
+    }
+
+    fn answer(self: *const Question) []const u8 {
+        return self.answer_storage[0..self.answer_len];
+    }
+};
+
 pub const Model = struct {
     pub const view_unbound = .{
         "connected", "cursor", "host_port", "auth_token_storage", "auth_token_len",
@@ -164,8 +221,12 @@ pub const Model = struct {
         "permission_tool_storage", "permission_tool_len", "messages", "message_count",
         "tools", "tool_count", "sessions", "session_count", "selected_session_key", "command_title_storage", "command_title_len",
         "command_rows", "command_row_count", "subagents", "subagent_count", "selected_subagent_key",
-        "subagent_transcript_storage", "subagent_transcript_len", "total_tokens", "total_cost", "assistantText", "authToken",
+        "subagent_transcript_storage", "subagent_transcript_len", "model_choices", "model_choice_count",
+        "total_tokens", "total_cost", "assistantText", "authToken",
         "permissionId", "hasMessages",
+        "question_request_id_storage", "question_request_id_len", "questions", "question_count", "question_index",
+        "question_answer", "question_error_storage", "question_error_len", "currentQuestion",
+        "inspector_visible",
     };
 
     connected: bool = false,
@@ -198,6 +259,14 @@ pub const Model = struct {
     permission_id_len: usize = 0,
     permission_tool_storage: [96]u8 = undefined,
     permission_tool_len: usize = 0,
+    question_request_id_storage: [128]u8 = undefined,
+    question_request_id_len: usize = 0,
+    questions: [max_questions]Question = [_]Question{.{}} ** max_questions,
+    question_count: usize = 0,
+    question_index: usize = 0,
+    question_answer: canvas.TextBuffer(2048) = .{},
+    question_error_storage: [256]u8 = undefined,
+    question_error_len: usize = 0,
     messages: [max_messages]Message = [_]Message{.{}} ** max_messages,
     message_count: usize = 0,
     tools: [max_tools]Tool = [_]Tool{.{}} ** max_tools,
@@ -210,12 +279,15 @@ pub const Model = struct {
     selected_subagent_key: u64 = 0,
     subagent_transcript_storage: [32768]u8 = undefined,
     subagent_transcript_len: usize = 0,
+    model_choices: [max_models]ModelChoice = [_]ModelChoice{.{}} ** max_models,
+    model_choice_count: usize = 0,
     command_title_storage: [96]u8 = undefined,
     command_title_len: usize = 0,
     command_rows: [max_command_rows]CommandRow = [_]CommandRow{.{}} ** max_command_rows,
     command_row_count: usize = 0,
     total_tokens: u64 = 0,
     total_cost: f64 = 0,
+    inspector_visible: bool = true,
 
     pub fn assistantText(self: *const Model) []const u8 {
         return self.assistant_storage[0..self.assistant_len];
@@ -234,14 +306,14 @@ pub const Model = struct {
     }
     pub fn workspaceLabel(self: *const Model) []const u8 {
         if (self.workspace_len == 0) return "Workspace unavailable";
-        return self.workspace_storage[0..self.workspace_len];
+        return std.fs.path.basename(self.workspace_storage[0..self.workspace_len]);
     }
     pub fn modelLabel(self: *const Model) []const u8 {
         if (self.model_len == 0) return "Default model";
         return self.model_storage[0..self.model_len];
     }
     pub fn providerLabel(self: *const Model) []const u8 {
-        if (self.provider_len == 0) return "Connecting";
+        if (self.provider_len == 0) return if (self.backendIsCodex()) "Codex" else "Flue";
         return self.provider_storage[0..self.provider_len];
     }
     pub fn backendLabel(self: *const Model) []const u8 {
@@ -260,6 +332,48 @@ pub const Model = struct {
     }
     pub fn permissionTool(self: *const Model) []const u8 {
         return self.permission_tool_storage[0..self.permission_tool_len];
+    }
+    pub fn questionPending(self: *const Model) bool {
+        return self.question_request_id_len > 0 and self.question_count > 0;
+    }
+    fn currentQuestion(self: *Model) ?*Question {
+        if (!self.questionPending() or self.question_index >= self.question_count) return null;
+        return &self.questions[self.question_index];
+    }
+    pub fn currentQuestionText(self: *const Model) []const u8 {
+        if (!self.questionPending() or self.question_index >= self.question_count) return "";
+        return self.questions[self.question_index].text();
+    }
+    pub fn questionAnswerText(self: *const Model) []const u8 {
+        return self.question_answer.text();
+    }
+    pub fn questionIsInput(self: *const Model) bool {
+        if (!self.questionPending() or self.question_index >= self.question_count) return false;
+        return self.questions[self.question_index].kind == .input;
+    }
+    pub fn questionIsChoice(self: *const Model) bool {
+        if (!self.questionPending() or self.question_index >= self.question_count) return false;
+        return self.questions[self.question_index].kind != .input;
+    }
+    pub fn questionOptionItems(self: *const Model) []const QuestionOption {
+        if (!self.questionPending() or self.question_index >= self.question_count) return &.{};
+        const question = &self.questions[self.question_index];
+        return question.options[0..question.option_count];
+    }
+    pub fn questionErrorText(self: *const Model) []const u8 {
+        return self.question_error_storage[0..self.question_error_len];
+    }
+    pub fn hasQuestionError(self: *const Model) bool {
+        return self.question_error_len > 0;
+    }
+    pub fn questionProgressLabel(self: *const Model, arena: std.mem.Allocator) []const u8 {
+        return std.fmt.allocPrint(arena, "Question {d} of {d}", .{ self.question_index + 1, self.question_count }) catch "Question";
+    }
+    pub fn questionActionLabel(self: *const Model) []const u8 {
+        return if (self.question_index + 1 >= self.question_count) "Submit answers" else "Next question";
+    }
+    pub fn questionHasPrevious(self: *const Model) bool {
+        return self.questionPending() and self.question_index > 0;
     }
     pub fn commandTitle(self: *const Model) []const u8 {
         return self.command_title_storage[0..self.command_title_len];
@@ -281,6 +395,9 @@ pub const Model = struct {
     }
     pub fn subagentTranscript(self: *const Model) []const u8 {
         return self.subagent_transcript_storage[0..self.subagent_transcript_len];
+    }
+    pub fn modelChoiceItems(self: *const Model) []const ModelChoice {
+        return self.model_choices[0..self.model_choice_count];
     }
     fn selectedSessionId(self: *const Model) []const u8 {
         for (self.sessions[0..self.session_count]) |*session| {
@@ -308,6 +425,9 @@ pub const Model = struct {
     }
     pub fn hasSessions(self: *const Model) bool {
         return self.session_count > 0;
+    }
+    pub fn hasModels(self: *const Model) bool {
+        return self.model_choice_count > 0;
     }
     pub fn hasTools(self: *const Model) bool {
         return self.tool_count > 0;
@@ -339,10 +459,31 @@ pub const Model = struct {
     pub fn sendDisabled(self: *const Model) bool {
         return !self.connected or self.processing or self.draft.isEmpty();
     }
+    pub fn queueDisabled(self: *const Model) bool {
+        return !self.connected or !self.processing or self.draft.isEmpty();
+    }
+    pub fn inspectorVisible(self: *const Model) bool {
+        return self.inspector_visible;
+    }
     pub fn connectionLabel(self: *const Model) []const u8 {
         if (!self.connected) return "Connecting";
         if (self.processing) return "Running";
         return "Ready";
+    }
+    pub fn modeIsBuild(self: *const Model) bool {
+        return std.mem.eql(u8, self.modeLabel(), "build");
+    }
+    pub fn modeIsAsk(self: *const Model) bool {
+        return std.mem.eql(u8, self.modeLabel(), "ask");
+    }
+    pub fn modeIsPlan(self: *const Model) bool {
+        return std.mem.eql(u8, self.modeLabel(), "plan");
+    }
+    pub fn backendIsFlue(self: *const Model) bool {
+        return std.mem.eql(u8, self.backendLabel(), "flue");
+    }
+    pub fn backendIsCodex(self: *const Model) bool {
+        return std.mem.eql(u8, self.backendLabel(), "codex");
     }
     pub fn setAuthToken(self: *Model, text: []const u8) void {
         self.auth_token_len = copyText(&self.auth_token_storage, text);
@@ -355,23 +496,40 @@ pub const Model = struct {
 
 pub const Msg = union(enum) {
     draft_edit: canvas.TextInputEvent,
+    question_edit: canvas.TextInputEvent,
+    question_option: u64,
+    question_back,
+    question_next,
     send,
+    queue_prompt,
     cancel,
     new_chat,
     select_session: u64,
     select_subagent: u64,
     stop_subagent,
     command_help,
+    select_model: u64,
     command_sessions,
-    command_models,
     command_permissions,
     command_tools,
     command_usage,
     command_analytics,
     command_benchmarks,
+    command_memory,
+    command_workspace,
+    command_skills,
+    command_mcp,
+    command_paste_image,
+    dismiss_command,
     command_compact,
     command_undo,
     command_copy,
+    starter_explain,
+    starter_tests,
+    starter_review,
+    toggle_inspector,
+    retry_connection,
+    dismiss_error,
     mode_build,
     mode_ask,
     mode_plan,
@@ -403,6 +561,10 @@ pub fn initialModel() Model {
 }
 
 fn initEffects(_: *Model, fx: *Effects) void {
+    spawnHost(fx);
+}
+
+fn spawnHost(fx: *Effects) void {
     fx.spawn(.{
         .key = host_process_key,
         .argv = &.{ "lavalamp", "gui-host" },
@@ -415,38 +577,51 @@ fn initEffects(_: *Model, fx: *Effects) void {
 pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
     switch (msg) {
         .draft_edit => |edit| model.draft.apply(edit),
-        .send => sendPrompt(model, fx),
-        .cancel => cancelTurn(model, fx),
-        .new_chat => {
-            model.message_count = 0;
-            model.tool_count = 0;
-            model.assistant_len = 0;
-            model.thinking_len = 0;
-            model.terminal_len = 0;
-            model.error_len = 0;
-            model.selected_session_key = 0;
-            model.clearCommandResult();
-            for (model.sessions[0..model.session_count]) |*session| session.selected = false;
+        .question_edit => |edit| {
+            model.question_answer.apply(edit);
+            if (model.currentQuestion()) |question| {
+                question.answer_len = copyText(&question.answer_storage, model.question_answer.text());
+            }
+            model.question_error_len = 0;
         },
+        .question_option => |key| selectQuestionOption(model, key),
+        .question_back => previousQuestion(model),
+        .question_next => advanceQuestion(model, fx),
+        .send => sendPrompt(model, fx),
+        .queue_prompt => queuePrompt(model, fx),
+        .cancel => cancelTurn(model, fx),
+        .new_chat => newSession(model, fx),
         .select_session => |key| selectSession(model, key, fx),
         .select_subagent => |key| selectSubagent(model, key, fx),
         .stop_subagent => stopSubagent(model, fx),
         .command_help => sendCommand(model, fx, "/help"),
         .command_sessions => sendCommand(model, fx, "/sessions"),
-        .command_models => sendCommand(model, fx, "/models"),
         .command_permissions => sendCommand(model, fx, "/permissions"),
         .command_tools => sendCommand(model, fx, "/tools"),
         .command_usage => sendCommand(model, fx, "/usage"),
         .command_analytics => sendCommand(model, fx, "/analytics"),
         .command_benchmarks => sendCommand(model, fx, "/benchmarks"),
+        .command_memory => sendCommand(model, fx, "/memory"),
+        .command_workspace => sendCommand(model, fx, "/workspace"),
+        .command_skills => sendCommand(model, fx, "/skills"),
+        .command_mcp => sendCommand(model, fx, "/mcp"),
+        .command_paste_image => sendCommand(model, fx, "/paste-image"),
+        .dismiss_command => model.clearCommandResult(),
         .command_compact => sendCommand(model, fx, "/compact"),
         .command_undo => sendCommand(model, fx, "/undo"),
         .command_copy => sendCommand(model, fx, "/copy"),
-        .mode_build => sendCommand(model, fx, "/build"),
-        .mode_ask => sendCommand(model, fx, "/ask"),
-        .mode_plan => sendCommand(model, fx, "/plan"),
-        .backend_flue => sendCommand(model, fx, "/backend flue"),
-        .backend_codex => sendCommand(model, fx, "/backend codex"),
+        .starter_explain => setStarterDraft(model, "Explain this codebase and identify the best place to start."),
+        .starter_tests => setStarterDraft(model, "Run the test suite, diagnose any failures, and fix them."),
+        .starter_review => setStarterDraft(model, "Review the current changes for bugs, regressions, and missing polish."),
+        .toggle_inspector => model.inspector_visible = !model.inspector_visible,
+        .retry_connection => retryConnection(model, fx),
+        .dismiss_error => model.error_len = 0,
+        .mode_build => sendControl(model, fx, "{\"action\":\"mode\",\"mode\":\"build\"}"),
+        .mode_ask => sendControl(model, fx, "{\"action\":\"mode\",\"mode\":\"ask\"}"),
+        .mode_plan => sendControl(model, fx, "{\"action\":\"mode\",\"mode\":\"plan\"}"),
+        .backend_flue => sendControl(model, fx, "{\"action\":\"backend\",\"backend\":\"flue\"}"),
+        .backend_codex => sendControl(model, fx, "{\"action\":\"backend\",\"backend\":\"codex\"}"),
+        .select_model => |key| selectModel(model, key, fx),
         .allow_permission => resolvePermission(model, fx, "allow"),
         .always_allow_permission => resolvePermission(model, fx, "always_allow"),
         .deny_permission => resolvePermission(model, fx, "deny"),
@@ -515,6 +690,19 @@ fn handleHostLine(model: *Model, line: native_sdk.EffectLine, fx: *Effects) void
     fetchSnapshot(model, fx);
 }
 
+fn retryConnection(model: *Model, fx: *Effects) void {
+    model.error_len = 0;
+    if (model.connected) {
+        fetchSnapshot(model, fx);
+    } else {
+        spawnHost(fx);
+    }
+}
+
+fn setStarterDraft(model: *Model, text: []const u8) void {
+    model.draft.set(text);
+}
+
 fn authHeader(model: *const Model, buffer: []u8) []const u8 {
     return std.fmt.bufPrint(buffer, "Bearer {s}", .{model.authToken()}) catch "";
 }
@@ -569,6 +757,32 @@ fn sendPrompt(model: *Model, fx: *Effects) void {
     model.error_len = 0;
 }
 
+fn queuePrompt(model: *Model, fx: *Effects) void {
+    if (model.queueDisabled()) return;
+    var url_buffer: [160]u8 = undefined;
+    var auth_buffer: [192]u8 = undefined;
+    var headers: [3]std.http.Header = undefined;
+    headers[0] = .{ .name = "authorization", .value = authHeader(model, &auth_buffer) };
+    headers[1] = .{ .name = "content-type", .value = "text/plain; charset=utf-8" };
+    var header_count: usize = 2;
+    const session_id = model.selectedSessionId();
+    if (session_id.len > 0) {
+        headers[header_count] = .{ .name = "x-lavalamp-session", .value = session_id };
+        header_count += 1;
+    }
+    fx.fetch(.{
+        .key = action_fetch_key,
+        .method = .POST,
+        .url = endpoint(model, &url_buffer, "/v1/native/queue"),
+        .headers = headers[0..header_count],
+        .body = model.draft.text(),
+        .timeout_ms = 10_000,
+        .on_response = Effects.responseMsg(.action_response),
+    });
+    model.draft.clear();
+    model.error_len = 0;
+}
+
 fn sendCommand(model: *Model, fx: *Effects, command: []const u8) void {
     var url_buffer: [160]u8 = undefined;
     var auth_buffer: [192]u8 = undefined;
@@ -589,6 +803,40 @@ fn sendCommand(model: *Model, fx: *Effects, command: []const u8) void {
     model.error_len = 0;
 }
 
+fn sendControl(model: *Model, fx: *Effects, body: []const u8) void {
+    if (!model.connected or model.processing) return;
+    var url_buffer: [160]u8 = undefined;
+    var auth_buffer: [192]u8 = undefined;
+    const headers = [_]std.http.Header{
+        .{ .name = "authorization", .value = authHeader(model, &auth_buffer) },
+        .{ .name = "content-type", .value = "application/json" },
+    };
+    fx.fetch(.{
+        .key = action_fetch_key,
+        .method = .POST,
+        .url = endpoint(model, &url_buffer, "/v1/native/control"),
+        .headers = &headers,
+        .body = body,
+        .timeout_ms = 10_000,
+        .on_response = Effects.responseMsg(.action_response),
+    });
+    model.error_len = 0;
+}
+
+fn selectModel(model: *Model, key: u64, fx: *Effects) void {
+    var selected: ?*ModelChoice = null;
+    for (model.model_choices[0..model.model_choice_count]) |*choice| {
+        choice.selected = choice.key == key;
+        if (choice.selected) selected = choice;
+    }
+    const choice = selected orelse return;
+    var body_buffer: [768]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&body_buffer);
+    std.json.Stringify.value(.{ .action = "model", .model = choice.id() }, .{}, &writer) catch return;
+    sendControl(model, fx, writer.buffered());
+    model.model_len = copyText(&model.model_storage, choice.id());
+}
+
 fn cancelTurn(model: *Model, fx: *Effects) void {
     if (!model.processing) return;
     var url_buffer: [160]u8 = undefined;
@@ -602,6 +850,46 @@ fn cancelTurn(model: *Model, fx: *Effects) void {
         .on_response = Effects.responseMsg(.action_response),
     });
     model.processing = false;
+}
+
+fn clearConversationLocal(model: *Model) void {
+    model.message_count = 0;
+    model.tool_count = 0;
+    model.assistant_len = 0;
+    model.thinking_len = 0;
+    model.terminal_len = 0;
+    model.error_len = 0;
+    model.permission_pending = false;
+    model.question_request_id_len = 0;
+    model.question_count = 0;
+    model.question_index = 0;
+    model.question_answer.clear();
+    model.question_error_len = 0;
+    model.selected_session_key = 0;
+    model.total_tokens = 0;
+    model.total_cost = 0;
+    model.clearCommandResult();
+    for (model.sessions[0..model.session_count]) |*session| session.selected = false;
+}
+
+fn newSession(model: *Model, fx: *Effects) void {
+    if (!model.connected) return;
+    if (model.processing) cancelTurn(model, fx);
+    var url_buffer: [160]u8 = undefined;
+    var auth_buffer: [192]u8 = undefined;
+    const headers = [_]std.http.Header{
+        .{ .name = "authorization", .value = authHeader(model, &auth_buffer) },
+        .{ .name = "content-type", .value = "application/json" },
+    };
+    fx.fetch(.{
+        .key = session_fetch_key,
+        .method = .POST,
+        .url = endpoint(model, &url_buffer, "/v1/session"),
+        .headers = &headers,
+        .body = "{}",
+        .on_response = Effects.responseMsg(.session_response),
+    });
+    clearConversationLocal(model);
 }
 
 fn selectSession(model: *Model, key: u64, fx: *Effects) void {
@@ -678,6 +966,107 @@ fn stopSubagent(model: *Model, fx: *Effects) void {
     });
 }
 
+fn selectQuestionOption(model: *Model, key: u64) void {
+    const question = model.currentQuestion() orelse return;
+    if (question.kind == .input) return;
+    for (question.options[0..question.option_count]) |*option| {
+        if (option.key != key) {
+            if (question.kind == .select) option.selected = false;
+            continue;
+        }
+        option.selected = if (question.kind == .select) true else !option.selected;
+        if (question.kind == .select) {
+            question.answer_len = copyText(&question.answer_storage, option.label());
+            model.question_answer.set(option.label());
+        }
+    }
+    model.question_error_len = 0;
+}
+
+fn previousQuestion(model: *Model) void {
+    if (!model.questionPending() or model.question_index == 0) return;
+    model.question_index -= 1;
+    const question = model.currentQuestion() orelse return;
+    model.question_answer.set(question.answer());
+    model.question_error_len = 0;
+}
+
+fn questionAnswered(question: *const Question) bool {
+    if (question.kind == .multiselect) {
+        for (question.options[0..question.option_count]) |option| {
+            if (option.selected) return true;
+        }
+        return false;
+    }
+    return std.mem.trim(u8, question.answer(), " \t\r\n").len > 0;
+}
+
+fn advanceQuestion(model: *Model, fx: *Effects) void {
+    const question = model.currentQuestion() orelse return;
+    if (question.kind == .input) {
+        question.answer_len = copyText(&question.answer_storage, model.question_answer.text());
+    }
+    if (!questionAnswered(question)) {
+        model.question_error_len = copyText(&model.question_error_storage, "Choose or enter an answer to continue.");
+        return;
+    }
+    if (model.question_index + 1 < model.question_count) {
+        model.question_index += 1;
+        const next = model.currentQuestion() orelse return;
+        model.question_answer.set(next.answer());
+        model.question_error_len = 0;
+        return;
+    }
+    submitQuestionAnswers(model, fx);
+}
+
+fn submitQuestionAnswers(model: *Model, fx: *Effects) void {
+    if (!model.questionPending()) return;
+    var body_buffer: [16 * 1024]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&body_buffer);
+    var json: std.json.Stringify = .{ .writer = &writer };
+    json.beginObject() catch return;
+    json.objectField("answers") catch return;
+    json.beginObject() catch return;
+    for (model.questions[0..model.question_count]) |*question| {
+        json.objectField(question.id()) catch return;
+        if (question.kind == .multiselect) {
+            json.beginArray() catch return;
+            for (question.options[0..question.option_count]) |*option| {
+                if (option.selected) json.write(option.label()) catch return;
+            }
+            json.endArray() catch return;
+        } else {
+            json.write(question.answer()) catch return;
+        }
+    }
+    json.endObject() catch return;
+    json.endObject() catch return;
+
+    var path_buffer: [256]u8 = undefined;
+    const request_id = model.question_request_id_storage[0..model.question_request_id_len];
+    const path = std.fmt.bufPrint(&path_buffer, "/v1/questions/{s}", .{request_id}) catch return;
+    var url_buffer: [320]u8 = undefined;
+    var auth_buffer: [192]u8 = undefined;
+    const headers = [_]std.http.Header{
+        .{ .name = "authorization", .value = authHeader(model, &auth_buffer) },
+        .{ .name = "content-type", .value = "application/json" },
+    };
+    fx.fetch(.{
+        .key = action_fetch_key,
+        .method = .POST,
+        .url = endpoint(model, &url_buffer, path),
+        .headers = &headers,
+        .body = writer.buffered(),
+        .on_response = Effects.responseMsg(.action_response),
+    });
+    model.question_request_id_len = 0;
+    model.question_count = 0;
+    model.question_index = 0;
+    model.question_answer.clear();
+    model.question_error_len = 0;
+}
+
 fn resolvePermission(model: *Model, fx: *Effects, decision: []const u8) void {
     if (!model.permission_pending) return;
     var path_buffer: [256]u8 = undefined;
@@ -725,6 +1114,16 @@ const SubagentPayload = struct {
     status: []const u8 = "pending",
 };
 const PendingPermissionPayload = struct { requestId: []const u8 = "", toolName: []const u8 = "" };
+const QuestionPayload = struct {
+    id: []const u8 = "",
+    question: []const u8 = "",
+    type: []const u8 = "input",
+    options: []const []const u8 = &.{},
+};
+const PendingQuestionPayload = struct {
+    requestId: []const u8 = "",
+    questions: []const QuestionPayload = &.{},
+};
 const SnapshotPayload = struct {
     cursor: u64 = 0,
     processing: bool = false,
@@ -738,6 +1137,7 @@ const SnapshotPayload = struct {
     mode: ?[]const u8 = null,
     @"error": ?[]const u8 = null,
     pendingPermission: ?PendingPermissionPayload = null,
+    pendingQuestion: ?PendingQuestionPayload = null,
     usage: UsagePayload = .{},
     messages: []const MessagePayload = &.{},
     tools: []const ToolPayload = &.{},
@@ -859,7 +1259,7 @@ pub fn applySnapshotJson(model: *Model, body: []const u8) bool {
     model.tool_count = @min(snapshot.tools.len, max_tools);
     for (snapshot.tools[0..model.tool_count], 0..) |tool, index| {
         const target = &model.tools[index];
-        target.id = std.hash.Wyhash.hash(0, tool.id);
+        target.id = std.hash.Wyhash.hash(0, tool.id) & std.math.maxInt(i64);
         target.name_len = copyText(&target.name_storage, tool.name);
         target.summary_len = copyText(&target.summary_storage, tool.summary);
         target.status_len = copyText(&target.status_storage, tool.status);
@@ -881,10 +1281,19 @@ pub fn applySnapshotJson(model: *Model, body: []const u8) bool {
     model.session_count = @min(data.sessions.len, max_sessions);
     for (data.sessions[0..model.session_count], 0..) |session, index| {
         const target = &model.sessions[index];
-        target.key = std.hash.Wyhash.hash(0, session.sessionId);
+        target.key = std.hash.Wyhash.hash(0, session.sessionId) & std.math.maxInt(i64);
         target.id_len = copyText(&target.id_storage, session.sessionId);
         target.prompt_len = copyText(&target.prompt_storage, session.prompt);
         target.selected = target.key == model.selected_session_key;
+    }
+
+    model.model_choice_count = @min(data.models.len, max_models);
+    for (data.models[0..model.model_choice_count], 0..) |choice, index| {
+        const target = &model.model_choices[index];
+        target.key = (index + 1) + 10_000;
+        target.id_len = copyText(&target.id_storage, choice.id);
+        target.name_len = copyText(&target.name_storage, if (choice.displayName.len > 0) choice.displayName else choice.id);
+        target.selected = std.mem.eql(u8, choice.id, model.modelLabel());
     }
 
     if (snapshot.pendingPermission) |permission| {
@@ -895,6 +1304,42 @@ pub fn applySnapshotJson(model: *Model, body: []const u8) bool {
         model.permission_pending = false;
         model.permission_id_len = 0;
         model.permission_tool_len = 0;
+    }
+
+    if (snapshot.pendingQuestion) |pending_question| {
+        const current_request = model.question_request_id_storage[0..model.question_request_id_len];
+        if (!std.mem.eql(u8, current_request, pending_question.requestId)) {
+            model.question_request_id_len = copyText(&model.question_request_id_storage, pending_question.requestId);
+            model.question_count = @min(pending_question.questions.len, max_questions);
+            model.question_index = 0;
+            model.question_error_len = 0;
+            model.question_answer.clear();
+            for (pending_question.questions[0..model.question_count], 0..) |payload, question_index| {
+                const question = &model.questions[question_index];
+                question.id_len = copyText(&question.id_storage, payload.id);
+                question.text_len = copyText(&question.text_storage, payload.question);
+                question.answer_len = 0;
+                question.kind = if (std.mem.eql(u8, payload.type, "select"))
+                    .select
+                else if (std.mem.eql(u8, payload.type, "multiselect"))
+                    .multiselect
+                else
+                    .input;
+                question.option_count = @min(payload.options.len, max_question_options);
+                for (payload.options[0..question.option_count], 0..) |label, option_index| {
+                    const option = &question.options[option_index];
+                    option.key = option_index + 1;
+                    option.len = copyText(&option.storage, label);
+                    option.selected = false;
+                }
+            }
+        }
+    } else {
+        model.question_request_id_len = 0;
+        model.question_count = 0;
+        model.question_index = 0;
+        model.question_answer.clear();
+        model.question_error_len = 0;
     }
     return true;
 }
@@ -916,6 +1361,21 @@ fn setError(model: *Model, message: []const u8) void {
     model.error_len = copyText(&model.error_storage, message);
 }
 
+fn lavaTokens() canvas.DesignTokens {
+    var tokens = canvas.DesignTokens.theme(.{ .color_scheme = .dark });
+    tokens.colors.background = canvas.Color.rgb8(16, 14, 13);
+    tokens.colors.surface = canvas.Color.rgb8(23, 20, 17);
+    tokens.colors.surface_subtle = canvas.Color.rgb8(33, 27, 22);
+    tokens.colors.surface_pressed = canvas.Color.rgb8(45, 35, 26);
+    tokens.colors.border = canvas.Color.rgba8(255, 166, 92, 38);
+    tokens.colors.accent = canvas.Color.rgb8(255, 122, 24);
+    tokens.colors.accent_text = canvas.Color.rgb8(20, 12, 7);
+    tokens.colors.focus_ring = canvas.Color.rgb8(255, 153, 64);
+    tokens.colors.info = canvas.Color.rgb8(255, 153, 64);
+    tokens.pixel_snap = .{ .geometry = true, .text = true };
+    return tokens;
+}
+
 pub fn main(init: std.process.Init) !void {
     const app_state = try LavalampApp.create(std.heap.page_allocator, .{
         .name = "lavalamp",
@@ -923,6 +1383,7 @@ pub fn main(init: std.process.Init) !void {
         .canvas_label = canvas_label,
         .update_fx = update,
         .init_fx = initEffects,
+        .tokens = lavaTokens(),
         .markup = .{ .source = app_markup, .watch_path = "src/app.native", .io = init.io },
     });
     defer app_state.destroy();

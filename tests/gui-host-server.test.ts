@@ -9,6 +9,7 @@ import {
 class FakeRuntime implements GuiHostRuntime {
   readonly store = new GuiEventStore();
   prompts: Array<[string, string | undefined]> = [];
+  queuedPrompts: Array<[string, string | undefined]> = [];
   permissions: Array<[string, GuiPermissionDecision]> = [];
   questions: Array<[string, Record<string, unknown>]> = [];
   cancelled = false;
@@ -18,6 +19,11 @@ class FakeRuntime implements GuiHostRuntime {
     this.prompts.push([prompt, sessionId]);
     this.store.append({ type: 'turn.started' });
     return 'request-1';
+  }
+
+  queuePrompt(prompt: string, sessionId?: string): string {
+    this.queuedPrompts.push([prompt, sessionId]);
+    return 'queued-1';
   }
 
   respondPermission(id: string, decision: GuiPermissionDecision): void {
@@ -185,6 +191,34 @@ describe('GUI host server', () => {
     });
   });
 
+  test('starts a clean host-backed session when no session id is provided', async () => {
+    const { request, runtime } = fixture();
+    runtime.store.append({ content: 'Old task', type: 'user.message' });
+    runtime.store.append({
+      requestId: 'question-1',
+      questions: [{ id: 'name', options: [], question: 'Name?', type: 'input' }],
+      type: 'question.requested',
+    });
+    runtime.store.append({
+      type: 'turn.completed',
+      usage: { cacheRead: 0, cacheWrite: 0, cost: 0.25, input: 10, output: 5, totalTokens: 15 },
+    });
+
+    const response = await request('/v1/session', {
+      body: '{}',
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(200);
+    expect(runtime.store.snapshot()).toMatchObject({
+      messages: [],
+      pendingQuestion: undefined,
+      processing: false,
+      tools: [],
+      usage: { cost: 0, totalTokens: 0 },
+    });
+  });
+
   test('offers compact native snapshot and raw prompt endpoints', async () => {
     const { request, runtime } = fixture();
     const prompt = await request('/v1/native/prompts', {
@@ -230,6 +264,25 @@ describe('GUI host server', () => {
     });
     expect(stopped.status).toBe(200);
     expect(runtime.stoppedSubagents).toEqual(['child-1']);
+  });
+
+  test('queues native follow-up prompts while a turn is running', async () => {
+    const { request, runtime } = fixture();
+    const response = await request('/v1/native/queue', {
+      body: 'Then run the full suite',
+      headers: {
+        authorization: 'Bearer secret-token',
+        'content-type': 'text/plain',
+        'x-lavalamp-session': 'session-a',
+      },
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(202);
+    expect(runtime.queuedPrompts).toEqual([['Then run the full suite', 'session-a']]);
+    expect(await response.json()).toMatchObject({
+      data: { requestId: 'queued-1' },
+    });
   });
 
   test('runs native slash commands through authenticated host API', async () => {

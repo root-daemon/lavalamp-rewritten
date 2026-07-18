@@ -30,7 +30,7 @@ export function createCustomBenchmark(
 
   write(
     join(suite, 'dataset.toml'),
-    `[dataset]\nname = "local/${name}"\ndescription = "Repository-owned Lavalamp benchmark"\nauthors = ["Lavalamp"]\nkeywords = ["lavalamp", "custom"]\n\n[[tasks]]\nname = "local/${name}-example"\n`,
+    `[dataset]\nname = "local/${name}"\ndescription = "Repository-owned Lavalamp benchmark"\nauthors = [{ name = "Lavalamp" }]\nkeywords = ["lavalamp", "custom"]\n\n[[tasks]]\nname = "local/${name}-example"\n`,
   );
   write(
     join(suite, 'example', 'instruction.md'),
@@ -38,7 +38,7 @@ export function createCustomBenchmark(
   );
   write(
     join(suite, 'example', 'task.toml'),
-    `schema_version = "1.3"\n\n[task]\nname = "local/${name}-example"\ndescription = "Verify the custom benchmark scaffold"\n\n[agent]\ntimeout_sec = 300.0\n\n[verifier]\ntimeout_sec = 60.0\n\n[environment]\ncpus = 1\nmemory_mb = 1024\nstorage_mb = 2048\n`,
+    `schema_version = "1.3"\n\n[task]\nname = "local/${name}-example"\ndescription = "Verify the custom benchmark scaffold"\nauthors = [{ name = "Lavalamp" }]\n\n[agent]\ntimeout_sec = 300.0\n\n[verifier]\ntimeout_sec = 60.0\n\n[environment]\ncpus = 1\nmemory_mb = 1024\nstorage_mb = 2048\n`,
   );
   write(
     join(suite, 'example', 'environment', 'Dockerfile'),
