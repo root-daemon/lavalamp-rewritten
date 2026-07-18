@@ -141,6 +141,23 @@ export interface GuiRepoWorktreeSnapshot {
   current: boolean;
 }
 
+export interface GuiPullRequestSnapshot {
+  number: number;
+  title: string;
+  state: string;
+  url: string;
+  reviewDecision?: string;
+  mergeStateStatus?: string;
+  isDraft?: boolean;
+}
+
+export interface GuiCiCheckSnapshot {
+  name: string;
+  state: string;
+  bucket?: string;
+  url?: string;
+}
+
 export interface GuiRepoStatusSnapshot {
   git: boolean;
   repository: string;
@@ -154,6 +171,8 @@ export interface GuiRepoStatusSnapshot {
   webUrl?: string;
   pullRequestUrl?: string;
   actionsUrl?: string;
+  pullRequest?: GuiPullRequestSnapshot;
+  checks: GuiCiCheckSnapshot[];
   worktrees: GuiRepoWorktreeSnapshot[];
   error?: string;
 }

@@ -330,9 +330,29 @@
                       <text wrap="true" foreground="text_muted">{repoLabel}</text>
                       <text wrap="true" foreground="text_muted">{repoHeadLabel}</text>
                       <text wrap="true" foreground="text_muted">{repoRemoteLabel}</text>
+                      <if test="{hasPullRequest}">
+                        <text wrap="true" foreground="text_muted">{repoPrTitleLabel}</text>
+                        <text wrap="true" foreground="text_muted">{repoReviewLabel}</text>
+                      </if>
+                      <else>
+                        <text wrap="true" foreground="text_muted">No open PR for this branch</text>
+                      </else>
+                      <text wrap="true" foreground="text_muted">{repoCheckSummaryLabel}</text>
                       <text wrap="true" foreground="text_muted">{repoPrLabel}</text>
                       <text wrap="true" foreground="text_muted">{repoActionsLabel}</text>
                     </column>
+                    <if test="{hasRepoChecks}">
+                      <accordion text="Checks">
+                        <column gap="4">
+                          <for each="repoCheckItems" key="id" as="check">
+                            <row gap="8" cross="center">
+                              <badge variant="secondary">{check.state}</badge>
+                              <text grow="1" wrap="true">{check.name}</text>
+                            </row>
+                          </for>
+                        </column>
+                      </accordion>
+                    </if>
                     <if test="{hasRepoWorktrees}">
                       <accordion text="Worktrees">
                         <column gap="4">

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GuiEventStore } from '../src/gui-host/event-store';
@@ -431,6 +431,28 @@ describe('GUI host commands', () => {
 
   test('renders repository orchestration links and worktrees for GUI review', async () => {
     const { runtime, workspace } = fixture();
+    const previousPath = process.env.PATH;
+    const fakeBin = join(root, 'fake-bin');
+    mkdirSync(fakeBin, { recursive: true });
+    const fakeGh = join(fakeBin, 'gh');
+    writeFileSync(
+      fakeGh,
+      [
+        '#!/usr/bin/env bash',
+        'if [[ "$*" == "pr view --json number,title,state,url,reviewDecision,mergeStateStatus,isDraft" ]]; then',
+        '  echo \'{"number":7,"title":"GUI parity","state":"OPEN","url":"https://github.com/owner/repo/pull/7","reviewDecision":"APPROVED","mergeStateStatus":"CLEAN","isDraft":false}\'',
+        '  exit 0',
+        'fi',
+        'if [[ "$*" == "pr checks --json name,state,bucket,link" ]]; then',
+        '  echo \'[{"name":"test","state":"SUCCESS","bucket":"pass","link":"https://github.com/owner/repo/actions/runs/1"},{"name":"lint","state":"PENDING","bucket":"pending"}]\'',
+        '  exit 0',
+        'fi',
+        'exit 1',
+        '',
+      ].join('\n'),
+    );
+    chmodSync(fakeGh, 0o755);
+    process.env.PATH = `${fakeBin}:${previousPath ?? ''}`;
     spawnSync('git', ['init', '-b', 'feature/gui'], { cwd: workspace });
     writeFileSync(join(workspace, 'tracked.txt'), 'first\n');
     spawnSync('git', ['add', 'tracked.txt'], { cwd: workspace });
@@ -453,24 +475,35 @@ describe('GUI host commands', () => {
       cwd: workspace,
     });
 
-    const repo = await runGuiCommand(runtime, workspace, '/server.mjs', '/repo');
-    const output = repo.rows.join('\n');
+    try {
+      const repo = await runGuiCommand(runtime, workspace, '/server.mjs', '/repo');
+      const output = repo.rows.join('\n');
 
-    expect(repo.title).toBe('/repo');
-    expect(output).toContain(`repository: ${realpathSync(workspace)}`);
-    expect(output).toContain('branch: feature/gui');
-    expect(output).toContain('head: ');
-    expect(output).toContain('initial commit');
-    expect(output).toContain('origin: git@github.com:owner/repo.git');
-    expect(output).toContain('github: https://github.com/owner/repo');
-    expect(output).toContain(
-      'pull requests: https://github.com/owner/repo/pulls?q=is%3Apr+head%3Afeature%2Fgui',
-    );
-    expect(output).toContain(
-      'actions: https://github.com/owner/repo/actions?query=branch%3Afeature%2Fgui',
-    );
-    expect(output).toContain('worktrees:');
-    expect(output).toContain('feature/gui');
+      expect(repo.title).toBe('/repo');
+      expect(output).toContain(`repository: ${realpathSync(workspace)}`);
+      expect(output).toContain('branch: feature/gui');
+      expect(output).toContain('head: ');
+      expect(output).toContain('initial commit');
+      expect(output).toContain('origin: git@github.com:owner/repo.git');
+      expect(output).toContain('github: https://github.com/owner/repo');
+      expect(output).toContain('pull request: #7 GUI parity');
+      expect(output).toContain('review: APPROVED · merge: CLEAN');
+      expect(output).toContain('checks: 1 passing · 0 failing · 1 pending');
+      expect(output).toContain(
+        'pull requests: https://github.com/owner/repo/pulls?q=is%3Apr+head%3Afeature%2Fgui',
+      );
+      expect(output).toContain(
+        'actions: https://github.com/owner/repo/actions?query=branch%3Afeature%2Fgui',
+      );
+      expect(output).toContain('worktrees:');
+      expect(output).toContain('feature/gui');
+    } finally {
+      if (previousPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = previousPath;
+      }
+    }
   });
 
   test('creates git worktree task lanes through the GUI command path', async () => {

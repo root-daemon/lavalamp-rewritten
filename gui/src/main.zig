@@ -51,6 +51,7 @@ const max_workspace_changes = 16;
 const max_diff_stats = 10;
 const max_subagents = 8;
 const max_repo_worktrees = 8;
+const max_repo_checks = 8;
 
 const Role = enum { user, assistant };
 
@@ -226,6 +227,23 @@ pub const RepoWorktree = struct {
     }
 };
 
+pub const RepoCheck = struct {
+    id: u64 = 0,
+    name_storage: [160]u8 = undefined,
+    name_len: usize = 0,
+    state_storage: [64]u8 = undefined,
+    state_len: usize = 0,
+
+    pub fn name(self: *const RepoCheck) []const u8 {
+        return self.name_storage[0..self.name_len];
+    }
+
+    pub fn state(self: *const RepoCheck) []const u8 {
+        if (self.state_len == 0) return "unknown";
+        return self.state_storage[0..self.state_len];
+    }
+};
+
 pub const Model = struct {
     pub const view_unbound = .{
         "connected", "cursor", "queue_count", "host_port", "auth_token_storage", "auth_token_len",
@@ -233,13 +251,13 @@ pub const Model = struct {
         "terminal_storage", "terminal_len", "error_storage", "error_len",
         "workspace_storage", "workspace_len", "model_storage", "model_len",
         "workspace_branch_storage", "workspace_branch_len", "workspace_summary_storage", "workspace_summary_len", "workspace_git", "workspace_clean",
-        "repo_git", "repo_storage", "repo_len", "repo_head_storage", "repo_head_len", "repo_remote_storage", "repo_remote_len", "repo_pr_storage", "repo_pr_len", "repo_actions_storage", "repo_actions_len",
+        "repo_git", "repo_storage", "repo_len", "repo_head_storage", "repo_head_len", "repo_remote_storage", "repo_remote_len", "repo_pr_storage", "repo_pr_len", "repo_pr_title_storage", "repo_pr_title_len", "repo_review_storage", "repo_review_len", "repo_check_summary_storage", "repo_check_summary_len", "repo_actions_storage", "repo_actions_len",
         "provider_storage", "provider_len", "backend_storage", "backend_len", "mode_storage", "mode_len", "permission_id_storage", "permission_id_len",
         "permission_tool_storage", "permission_tool_len", "pending_question", "question_id_storage", "question_id_len", "question_text_storage", "question_text_len",
         "question_body_storage", "messages", "message_count",
         "tools", "tool_count", "sessions", "session_count", "models", "model_count", "selected_session_key", "command_title_storage", "command_title_len",
         "command_rows", "command_row_count", "workspace_changes", "workspace_change_count", "diff_stats", "diff_stat_count", "total_tokens", "total_cost", "assistantText", "authToken",
-        "permissionId", "hasMessages", "subagents", "subagent_count", "repo_worktrees", "repo_worktree_count",
+        "permissionId", "hasMessages", "subagents", "subagent_count", "repo_worktrees", "repo_worktree_count", "repo_checks", "repo_check_count",
     };
 
     connected: bool = false,
@@ -275,6 +293,12 @@ pub const Model = struct {
     repo_remote_len: usize = 0,
     repo_pr_storage: [360]u8 = undefined,
     repo_pr_len: usize = 0,
+    repo_pr_title_storage: [360]u8 = undefined,
+    repo_pr_title_len: usize = 0,
+    repo_review_storage: [160]u8 = undefined,
+    repo_review_len: usize = 0,
+    repo_check_summary_storage: [160]u8 = undefined,
+    repo_check_summary_len: usize = 0,
     repo_actions_storage: [360]u8 = undefined,
     repo_actions_len: usize = 0,
     model_storage: [256]u8 = undefined,
@@ -317,6 +341,8 @@ pub const Model = struct {
     subagent_count: usize = 0,
     repo_worktrees: [max_repo_worktrees]RepoWorktree = [_]RepoWorktree{.{}} ** max_repo_worktrees,
     repo_worktree_count: usize = 0,
+    repo_checks: [max_repo_checks]RepoCheck = [_]RepoCheck{.{}} ** max_repo_checks,
+    repo_check_count: usize = 0,
     total_tokens: u64 = 0,
     total_cost: f64 = 0,
 
@@ -362,6 +388,18 @@ pub const Model = struct {
     pub fn repoPrLabel(self: *const Model) []const u8 {
         if (self.repo_pr_len == 0) return "PR link unavailable";
         return self.repo_pr_storage[0..self.repo_pr_len];
+    }
+    pub fn repoPrTitleLabel(self: *const Model) []const u8 {
+        if (self.repo_pr_title_len == 0) return "No open PR for this branch";
+        return self.repo_pr_title_storage[0..self.repo_pr_title_len];
+    }
+    pub fn repoReviewLabel(self: *const Model) []const u8 {
+        if (self.repo_review_len == 0) return "review unavailable";
+        return self.repo_review_storage[0..self.repo_review_len];
+    }
+    pub fn repoCheckSummaryLabel(self: *const Model) []const u8 {
+        if (self.repo_check_summary_len == 0) return "checks unavailable";
+        return self.repo_check_summary_storage[0..self.repo_check_summary_len];
     }
     pub fn repoActionsLabel(self: *const Model) []const u8 {
         if (self.repo_actions_len == 0) return "CI link unavailable";
@@ -416,6 +454,9 @@ pub const Model = struct {
     pub fn repoWorktreeItems(self: *const Model) []const RepoWorktree {
         return self.repo_worktrees[0..self.repo_worktree_count];
     }
+    pub fn repoCheckItems(self: *const Model) []const RepoCheck {
+        return self.repo_checks[0..self.repo_check_count];
+    }
     pub fn messageItems(self: *const Model) []const Message {
         return self.messages[0..self.message_count];
     }
@@ -466,6 +507,12 @@ pub const Model = struct {
     }
     pub fn hasRepoWorktrees(self: *const Model) bool {
         return self.repo_worktree_count > 0;
+    }
+    pub fn hasPullRequest(self: *const Model) bool {
+        return self.repo_pr_title_len > 0;
+    }
+    pub fn hasRepoChecks(self: *const Model) bool {
+        return self.repo_check_count > 0;
     }
     pub fn usageLabel(self: *const Model, arena: std.mem.Allocator) []const u8 {
         return std.fmt.allocPrint(arena, "{d} tokens · ${d:.4}", .{ self.total_tokens, self.total_cost }) catch "Usage unavailable";
@@ -894,6 +941,20 @@ fn appendJsonString(buffer: []u8, index: *usize, text: []const u8) !void {
     try appendByte(buffer, index, '"');
 }
 
+fn isPassingCheckState(state: []const u8) bool {
+    return std.mem.eql(u8, state, "pass") or
+        std.mem.eql(u8, state, "passing") or
+        std.mem.eql(u8, state, "success") or
+        std.mem.eql(u8, state, "completed");
+}
+
+fn isFailingCheckState(state: []const u8) bool {
+    return std.mem.eql(u8, state, "fail") or
+        std.mem.eql(u8, state, "failing") or
+        std.mem.eql(u8, state, "failure") or
+        std.mem.eql(u8, state, "cancelled");
+}
+
 fn cancelTurn(model: *Model, fx: *Effects) void {
     if (!model.processing) return;
     var url_buffer: [160]u8 = undefined;
@@ -1055,6 +1116,21 @@ const RepoWorktreePayload = struct {
     head: ?[]const u8 = null,
     current: bool = false,
 };
+const RepoPullRequestPayload = struct {
+    number: u64 = 0,
+    title: []const u8 = "",
+    state: []const u8 = "",
+    url: []const u8 = "",
+    reviewDecision: ?[]const u8 = null,
+    mergeStateStatus: ?[]const u8 = null,
+    isDraft: bool = false,
+};
+const RepoCheckPayload = struct {
+    name: []const u8 = "",
+    state: []const u8 = "",
+    bucket: ?[]const u8 = null,
+    url: ?[]const u8 = null,
+};
 const RepoStatusPayload = struct {
     git: bool = false,
     repository: []const u8 = "",
@@ -1065,6 +1141,8 @@ const RepoStatusPayload = struct {
     webUrl: ?[]const u8 = null,
     pullRequestUrl: ?[]const u8 = null,
     actionsUrl: ?[]const u8 = null,
+    pullRequest: ?RepoPullRequestPayload = null,
+    checks: []const RepoCheckPayload = &.{},
     worktrees: []const RepoWorktreePayload = &.{},
 };
 const NativeData = struct {
@@ -1229,6 +1307,39 @@ pub fn applySnapshotJson(model: *Model, body: []const u8) bool {
     model.repo_head_len = copyText(&model.repo_head_storage, repo_status.head orelse "");
     model.repo_pr_len = copyText(&model.repo_pr_storage, repo_status.pullRequestUrl orelse "");
     model.repo_actions_len = copyText(&model.repo_actions_storage, repo_status.actionsUrl orelse "");
+    model.repo_pr_title_len = 0;
+    model.repo_review_len = 0;
+    if (repo_status.pullRequest) |pr| {
+        var title_buffer: [360]u8 = undefined;
+        const title = std.fmt.bufPrint(&title_buffer, "#{d} {s}", .{ pr.number, pr.title }) catch pr.title;
+        model.repo_pr_title_len = copyText(&model.repo_pr_title_storage, title);
+        var review_buffer: [160]u8 = undefined;
+        const review = std.fmt.bufPrint(&review_buffer, "{s} · review {s} · merge {s}", .{
+            if (pr.isDraft) "draft" else pr.state,
+            pr.reviewDecision orelse "pending",
+            pr.mergeStateStatus orelse "unknown",
+        }) catch pr.state;
+        model.repo_review_len = copyText(&model.repo_review_storage, review);
+    }
+    model.repo_check_count = @min(repo_status.checks.len, max_repo_checks);
+    var pass_count: u64 = 0;
+    var fail_count: u64 = 0;
+    var pending_count: u64 = 0;
+    for (repo_status.checks[0..model.repo_check_count], 0..) |check, index| {
+        const target = &model.repo_checks[index];
+        target.id = std.hash.Wyhash.hash(0, check.name);
+        target.name_len = copyText(&target.name_storage, check.name);
+        const state = check.bucket orelse check.state;
+        target.state_len = copyText(&target.state_storage, state);
+        if (isPassingCheckState(state)) pass_count += 1 else if (isFailingCheckState(state)) fail_count += 1 else pending_count += 1;
+    }
+    if (model.repo_check_count > 0) {
+        var check_summary_buffer: [160]u8 = undefined;
+        const summary = std.fmt.bufPrint(&check_summary_buffer, "{d} passing · {d} failing · {d} pending", .{ pass_count, fail_count, pending_count }) catch "";
+        model.repo_check_summary_len = copyText(&model.repo_check_summary_storage, summary);
+    } else {
+        model.repo_check_summary_len = 0;
+    }
     model.repo_remote_len = 0;
     if (repo_status.webUrl) |web_url| {
         model.repo_remote_len = copyText(&model.repo_remote_storage, web_url);
