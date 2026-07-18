@@ -94,7 +94,7 @@ bin/lavalamp (bash wrapper)
                   art.ts      — Slash commands, lava lamp frames, syntaxStyle
                   discover.ts — File/skill discovery, fuzzy search
                   sessions.ts — Session save/load/list (JSON in ~/.lavalamp/sessions/)
-                  subs.ts     — SubAgentManager; spawns parallel FlueProcess children
+                  subs.ts     — Flue SubAgentManager plus runtime projection helpers
                   tools.ts    — Tool arg/result summarization, diff detection,
                                 file path extraction, language detection, EXT_LANG_MAP
 ```
@@ -197,10 +197,10 @@ bin/lavalamp (bash wrapper)
 
 **Parallel subagents:**
 
-- `deploy_parallel_subs` tool result is intercepted by the TUI.
-- `SubAgentManager` spawns up to 3 isolated `FlueProcess` children with focused research prompts.
-- Subagent panel shows running/done/failed state; `q` kills the first running subagent.
-- When all subagents finish, results are merged into a follow-up prompt for the main agent.
+- Flue's `deploy_parallel_subs` result is intercepted by the active runtime, which spawns up to 3 isolated `FlueProcess` research children and merges their findings into a follow-up prompt.
+- Codex uses native app-server subagent threads. Lavalamp tracks `thread/started`, `thread/status/changed`, and `collabAgentToolCall` lifecycle data without mixing child output into the main chat.
+- The shared runtime contract exposes list, read-only inspect, stop, deploy, and clear operations to both the TUI and GUI host.
+- `/subagents [id]` lists children or opens a read-only transcript; `q` stops the first running child. The native GUI activity rail provides selection, inspection, and Stop controls.
 
 ---
 

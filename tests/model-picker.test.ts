@@ -1,14 +1,25 @@
 import { describe, expect, test } from 'bun:test';
 import {
   createModelPickerState,
+  loadModelPickerModels,
+  modelSelection,
   moveModelPickerSelection,
+  selectedModel,
   selectedModelId,
 } from '../src/tui/model-picker.ts';
 import { BUILD_MODEL, listModels } from '../src/config/models.ts';
+import { HELP_COMMANDS } from '../src/tui/slash-data.ts';
 
 describe('model picker', () => {
+  test('advertises the unified model catalog', () => {
+    expect(HELP_COMMANDS).toContainEqual([
+      '/models',
+      'Browse Cloudflare and Codex models',
+    ]);
+  });
+
   test('selects the current model initially', () => {
-    const state = createModelPickerState(BUILD_MODEL);
+    const state = createModelPickerState(BUILD_MODEL, 'flue');
     expect(selectedModelId(state)).toBe(BUILD_MODEL);
   });
 
@@ -19,7 +30,7 @@ describe('model picker', () => {
     expect(first).toBeDefined();
     expect(second).toBeDefined();
 
-    const state = createModelPickerState(first ?? BUILD_MODEL);
+    const state = createModelPickerState(first ?? BUILD_MODEL, 'flue');
     moveModelPickerSelection(state, 1);
     expect(selectedModelId(state)).toBe(second);
   });
@@ -31,14 +42,14 @@ describe('model picker', () => {
     expect(second).toBeDefined();
     expect(first).toBeDefined();
 
-    const state = createModelPickerState(second ?? BUILD_MODEL);
+    const state = createModelPickerState(second ?? BUILD_MODEL, 'flue');
     moveModelPickerSelection(state, -1);
     expect(selectedModelId(state)).toBe(first);
   });
 
   test('does not move before the first model', () => {
     const first = listModels()[0]?.id ?? BUILD_MODEL;
-    const state = createModelPickerState(first);
+    const state = createModelPickerState(first, 'flue');
     moveModelPickerSelection(state, -1);
     expect(selectedModelId(state)).toBe(first);
   });
@@ -46,26 +57,24 @@ describe('model picker', () => {
   test('does not move after the last model', () => {
     const models = listModels();
     const last = models.at(-1)?.id ?? BUILD_MODEL;
-    const state = createModelPickerState(last);
+    const state = createModelPickerState(last, 'flue');
     moveModelPickerSelection(state, 1);
     expect(selectedModelId(state)).toBe(last);
   });
 
   test('selects the server default from a Codex model catalog', () => {
     const models = [
-      { id: 'gpt-first', isDefault: false },
-      { id: 'gpt-default', isDefault: true },
+      { backend: 'codex' as const, id: 'gpt-first', isDefault: false },
+      { backend: 'codex' as const, id: 'gpt-default', isDefault: true },
     ];
 
-    const state = createModelPickerState('server default', models);
+    const state = createModelPickerState('server default', 'codex', models);
 
     expect(selectedModelId(state)).toBe('gpt-default');
   });
 
-  test('loads Codex models for the interactive picker', async () => {
-    const module = await import('../src/tui/model-picker.ts');
-    const loadModels = Reflect.get(module, 'loadModelPickerModels');
-    const models = [
+  test('loads Cloudflare and Codex models into one provider-aware catalog', async () => {
+    const codexModels = [
       {
         description: 'Default Codex model',
         displayName: 'GPT Default',
@@ -76,9 +85,43 @@ describe('model picker', () => {
       },
     ];
 
-    expect(typeof loadModels).toBe('function');
-    if (typeof loadModels !== 'function') return;
+    const models = await loadModelPickerModels(async () => codexModels);
 
-    expect(await loadModels('codex', async () => models)).toEqual(models);
+    expect(models.some((model) => model.backend === 'flue')).toBe(true);
+    expect(models).toContainEqual({
+      ...codexModels[0],
+      backend: 'codex',
+    });
+  });
+
+  test('returns the complete selected model entry', () => {
+    const models = [
+      { backend: 'flue' as const, id: 'cf-model' },
+      { backend: 'codex' as const, id: 'gpt-model' },
+    ];
+    const state = createModelPickerState('cf-model', 'flue', models);
+
+    moveModelPickerSelection(state, 1);
+
+    expect(selectedModel(state)).toEqual({
+      backend: 'codex',
+      id: 'gpt-model',
+    });
+  });
+
+  test('keeps same-backend model selection in the current runtime', () => {
+    expect(modelSelection('flue', { backend: 'flue', id: 'cf-model' })).toEqual({
+      backend: 'flue',
+      modelId: 'cf-model',
+      requiresBackendSwitch: false,
+    });
+  });
+
+  test('requests a backend switch for a model owned by another provider', () => {
+    expect(modelSelection('flue', { backend: 'codex', id: 'gpt-model' })).toEqual({
+      backend: 'codex',
+      modelId: 'gpt-model',
+      requiresBackendSwitch: true,
+    });
   });
 });

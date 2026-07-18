@@ -79,6 +79,20 @@ describe('analytics store', () => {
     store.close();
   });
 
+  test('rates the latest recorded run for a workspace', () => {
+    const { dbPath, root } = fixture();
+    const store = new AnalyticsStore(dbPath);
+    store.createRun({ agent: 'build', mode: 'gui', workspaceRoot: root });
+
+    expect(store.rateLatestRun(root, 'helpful')).toBe(true);
+    expect(store.rateLatestRun(join(root, 'missing'), 'unhelpful')).toBe(false);
+    expect(
+      store.report({ range: 'all', scope: 'project', workspaceRoot: root })
+        .outcomes.helpful,
+    ).toBe(1);
+    store.close();
+  });
+
   test('isolates projects while supporting global queries and concurrent writers', () => {
     const { dbPath, root } = fixture();
     const first = new AnalyticsStore(dbPath);

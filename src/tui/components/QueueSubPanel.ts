@@ -1,6 +1,6 @@
 import { TextRenderable } from '@opentui/core';
 import { COLORS } from '../theme';
-import type { SubAgent } from '../state';
+import type { RuntimeSubagent } from '../../runtime/types';
 import { BasePanelManager } from './BasePanelManager';
 import type { BasePanelContext } from './BasePanelManager';
 
@@ -60,7 +60,7 @@ export class SubPanelManager extends BasePanelManager {
   }
 
   refresh(
-    subAgents: SubAgent[],
+    subAgents: RuntimeSubagent[],
     spinnerFrames: string[],
     spinnerFrame: number,
   ): void {
@@ -73,18 +73,18 @@ export class SubPanelManager extends BasePanelManager {
       const icon =
         sub.status === 'running'
           ? spinnerFrames[spinnerFrame]
-          : sub.status === 'done'
+          : sub.status === 'completed'
             ? '✓'
             : '×';
       const preview =
-        sub.query.length > 70 ? `${sub.query.slice(0, 67)}...` : sub.query;
+        sub.task.length > 70 ? `${sub.task.slice(0, 67)}...` : sub.task;
       this.body.add(
         new TextRenderable(this.ctx.renderer, {
-          content: `  ${icon} ${sub.id} ${sub.status}: ${preview}`,
+          content: `  ${icon} ${sub.name} ${sub.status}: ${preview}`,
           fg:
             sub.status === 'running'
               ? COLORS.pink
-              : sub.status === 'done'
+              : sub.status === 'completed'
                 ? COLORS.green
                 : COLORS.red,
           id: this.ctx.nextId(),

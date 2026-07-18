@@ -94,6 +94,7 @@ lavalamp [command/flag]
 | `lavalamp models` | List known models, context window sizes, and capabilities. |
 | `lavalamp models --backend codex` | List the models and reasoning efforts reported by Codex. |
 | `lavalamp benchmark list` | Fetch or list cached public benchmark metadata and leaderboards. |
+| `lavalamp benchmark demo [suite]` | Validate and run a safe, credential-free Oracle demo (defaults to `lavalamp-quality`). |
 | `lavalamp benchmark init <name>` | Scaffold a repository-owned Harbor benchmark. |
 | `lavalamp benchmark run <suite>` | Run a public or custom suite with one or more agent profiles. |
 | `lavalamp config show` | Print current configuration (default model, AI Gateway status). |
@@ -105,6 +106,17 @@ lavalamp [command/flag]
 The benchmark catalog refreshes Terminal-Bench 2, SWE Atlas QnA, and
 CursorBench from their official sources. CursorBench is reference-only because
 its tasks are private; the other two can run through Harbor.
+
+When running from a source checkout, install the JavaScript and Harbor
+dependencies first. Harbor currently needs Python 3.13 for one of its native
+dependencies.
+
+```bash
+bun install
+bun run build
+uv tool install --python 3.13 harbor
+docker info
+```
 
 ```bash
 lavalamp benchmark refresh
@@ -121,6 +133,25 @@ task layout. Named profiles may be stored in `benchmarks/profiles/<name>.json`;
 they control `retrieval`, `workflow`, `orchestration`, and `budget` only for the
 benchmark process. Use `--output-format json` for scriptable results, or open
 `/benchmarks` in the TUI for the split-view browser.
+
+This repository includes `benchmarks/lavalamp-quality`, a two-task custom suite.
+Run its deterministic demo with one command. This validates the suite and runs
+its Oracle solutions in Docker without model API usage:
+
+```bash
+lavalamp benchmark demo
+```
+
+To benchmark a real model instead, run a bounded one-task smoke test with:
+
+```bash
+lavalamp benchmark validate lavalamp-quality
+lavalamp benchmark run lavalamp-quality \
+  --model cloudflare-workers-ai/@cf/zai-org/glm-4.7-flash \
+  --profile baseline --sample 1 --seed 1 --concurrency 1
+```
+
+The run command invokes the configured model and may incur provider usage.
 
 ### CLI Flags
 
@@ -160,6 +191,7 @@ Type these commands directly into the prompt input box:
 * `/benchmarks` - Browse public benchmark data, custom suites, and saved runs.
 * `/workspace` - Change the workspace directory.
 * `/skills` - List or load customized skills from `.agents/skills`.
+* `/subagents [id]` - List subagents or open a child thread in a read-only inspector.
 * `/permissions` - View or update your security rules.
 * `/autorun` - Manage commands allowed to run without prompting.
 * `/sudo` - Toggle allow-everything mode (asks for confirmation first).
@@ -239,7 +271,7 @@ sequenceDiagram
   * The parent process pushes user prompts to the server.
   * The server streams text tokens, reasoning steps, tool statuses, and live tool stdout/stderr (`bash_stream`) back to the TUI.
   * When the server requests a mutating file change or terminal command, it sends a `permission_request` message and pauses. The TUI captures user approval and sends a `permission_response` back to continue execution.
-* **Parallel Research Subagents**: When the `deploy_parallel_subs` tool is triggered, the TUI interceptor handles launching up to 3 separate child processes running parallel research prompts. When complete, their findings are automatically merged and fed back to the parent agent.
+* **Subagents**: Flue keeps its `deploy_parallel_subs` flow with up to 3 research child processes. Codex uses native app-server subagent threads. Both backends appear in the same TUI and native GUI activity views, support read-only transcript inspection, and allow a running child to be stopped. Completed Flue findings are still merged back into the parent agent automatically.
 
 ---
 

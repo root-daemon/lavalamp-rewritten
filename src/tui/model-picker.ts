@@ -2,7 +2,11 @@ import { listModels } from '../config/models';
 import type { AgentBackend } from '../runtime/backend';
 
 export interface ModelPickerEntry {
+  backend: AgentBackend;
+  description?: string;
+  displayName?: string;
   id: string;
+  inputModalities?: string[];
   isDefault?: boolean;
   supportedReasoningEfforts?: string[];
 }
@@ -12,12 +16,28 @@ export interface ModelPickerState {
   selectedIndex: number;
 }
 
+export interface ModelSelection {
+  backend: AgentBackend;
+  modelId: string;
+  requiresBackendSwitch: boolean;
+}
+
 export function createModelPickerState(
   currentModel: string,
-  models: ModelPickerEntry[] = listModels(),
+  currentBackend: AgentBackend,
+  models: ModelPickerEntry[] = listModels().map((model) => ({
+    ...model,
+    backend: 'flue',
+  })),
 ): ModelPickerState {
-  const currentIndex = models.findIndex((model) => model.id === currentModel);
-  const defaultIndex = models.findIndex((model) => model.isDefault === true);
+  const currentIndex = models.findIndex(
+    (model) =>
+      model.backend === currentBackend && model.id === currentModel,
+  );
+  const defaultIndex = models.findIndex(
+    (model) =>
+      model.backend === currentBackend && model.isDefault === true,
+  );
   const selectedIndex = currentIndex >= 0
     ? currentIndex
     : Math.max(0, defaultIndex);
@@ -25,10 +45,19 @@ export function createModelPickerState(
 }
 
 export async function loadModelPickerModels(
-  backend: AgentBackend,
-  listCodexModels: () => Promise<ModelPickerEntry[]>,
+  listCodexModels: () => Promise<Omit<ModelPickerEntry, 'backend'>[]>,
 ): Promise<ModelPickerEntry[]> {
-  return backend === 'codex' ? listCodexModels() : listModels();
+  const codexModels = await listCodexModels();
+  return [
+    ...listModels().map((model) => ({
+      ...model,
+      backend: 'flue' as const,
+    })),
+    ...codexModels.map((model) => ({
+      ...model,
+      backend: 'codex' as const,
+    })),
+  ];
 }
 
 export function moveModelPickerSelection(
@@ -42,5 +71,22 @@ export function moveModelPickerSelection(
 }
 
 export function selectedModelId(state: ModelPickerState): string | undefined {
-  return state.models[state.selectedIndex]?.id;
+  return selectedModel(state)?.id;
+}
+
+export function selectedModel(
+  state: ModelPickerState,
+): ModelPickerEntry | undefined {
+  return state.models[state.selectedIndex];
+}
+
+export function modelSelection(
+  activeBackend: AgentBackend,
+  entry: ModelPickerEntry,
+): ModelSelection {
+  return {
+    backend: entry.backend,
+    modelId: entry.id,
+    requiresBackendSwitch: entry.backend !== activeBackend,
+  };
 }

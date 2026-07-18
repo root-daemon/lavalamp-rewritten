@@ -1,6 +1,7 @@
 import {
   CodeRenderable,
   DiffRenderable,
+  MarkdownRenderable,
   ScrollBoxRenderable,
   TextAttributes,
   TextRenderable,
@@ -94,6 +95,38 @@ export function openCodeViewer(ctx: ViewerContext, filePath: string): void {
   ctx.hideMainTui();
   overlay.focus();
   const offKey = installVimKeys(ctx.renderer, codeScroll, commandLine, () => {
+    ctx.closeViewer(offKey);
+  });
+}
+
+export function openTextViewer(
+  ctx: ViewerContext,
+  title: string,
+  content: string,
+): void {
+  const { renderer, overlay, nextId } = ctx;
+  overlay.add(createTitleBar(ctx, title));
+
+  const scroll = new ScrollBoxRenderable(renderer, {
+    flexGrow: 1,
+    id: 'text-scroll',
+    scrollY: true,
+    stickyScroll: false,
+    width: '100%',
+  });
+  scroll.add(new MarkdownRenderable(renderer, {
+    content,
+    fg: COLORS.white,
+    id: nextId(),
+    syntaxStyle: codeSyntaxStyle,
+    width: '100%',
+  }));
+  overlay.add(scroll);
+
+  const commandLine = addViewerChrome(ctx);
+  ctx.hideMainTui();
+  overlay.focus();
+  const offKey = installVimKeys(ctx.renderer, scroll, commandLine, () => {
     ctx.closeViewer(offKey);
   });
 }

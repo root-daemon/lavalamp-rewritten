@@ -141,4 +141,24 @@ describe('GUI event store', () => {
       tools: [],
     });
   });
+
+  test('replaces subagent lifecycle state without changing the main turn', () => {
+    const store = new GuiEventStore();
+    store.append({ type: 'turn.started' });
+    store.append({
+      subagents: [{
+        id: 'child-1',
+        name: 'Atlas',
+        task: 'Inspect auth',
+        status: 'running',
+        startedAt: 1,
+      }],
+      type: 'subagents.updated',
+    });
+
+    expect(store.snapshot()).toMatchObject({
+      processing: true,
+      subagents: [{ id: 'child-1', name: 'Atlas', status: 'running' }],
+    });
+  });
 });

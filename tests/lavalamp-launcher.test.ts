@@ -21,7 +21,7 @@ describe('bin/lavalamp launcher environment', () => {
       resolve(import.meta.dir, '../bin/lavalamp'),
       'utf8',
     );
-    expect(launcher).toContain('gui|gui-host)');
+    expect(launcher).toContain('gui|gui-host|benchmark|benchmarks)');
     expect(launcher).toContain('bun run "${REPO_DIR}/src/run.ts" "$@"');
     expect(launcher).toContain('else\n  EXTRA_ARGS=(src/run.ts)');
   });

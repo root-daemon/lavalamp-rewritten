@@ -160,6 +160,38 @@ describe('benchmark CLI', () => {
     expect(payload.comparison.recommendedRunId).toBeDefined();
   });
 
+  test('runs a credential-free, single-concurrency Oracle demo', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'lavalamp-workspace-'));
+    const { ctx, stdout } = context(workspace);
+    await runBenchmarkCli(['init', 'lavalamp-quality'], ctx);
+    let invoked: Parameters<BenchmarkCliContext['executeHarbor']>[0] | undefined;
+    let preflightModel = '';
+    ctx.executeHarbor = async (invocation) => {
+      invoked = invocation;
+      return 0;
+    };
+    ctx.preflight = (model) => {
+      preflightModel = model;
+      return [];
+    };
+
+    const code = await runBenchmarkCli(
+      ['demo', '--output-format', 'json'],
+      ctx,
+    );
+
+    expect(code).toBe(0);
+    expect(preflightModel).toBe('oracle');
+    expect(invoked?.args).toContain('oracle');
+    expect(invoked?.args).toContain('--yes');
+    expect(invoked?.args).not.toContain('--model');
+    expect(invoked?.config.concurrency).toBe(1);
+    expect(JSON.parse(stdout.at(-1) as string)).toMatchObject({
+      agent: 'oracle',
+      suite: 'lavalamp-quality',
+    });
+  });
+
   test('stores evidence-checked opt-in failure analysis', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'lavalamp-workspace-'));
     const { ctx, stdout } = context(workspace);

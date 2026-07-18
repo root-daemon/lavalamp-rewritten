@@ -19,7 +19,7 @@ import { isCodexLoginRequired } from '../runtime/codex/runtime';
 import type { RuntimeCallbacks, RuntimeMode, RuntimeModel } from '../runtime/types';
 import { AnalyticsRecorder, type RunRating } from '../analytics';
 import { SubAgentManager } from '../tui/subs';
-import type { Message, SubAgent } from '../tui/state';
+import type { FlueSubAgent, Message } from '../tui/state';
 import { BackupEngine } from '../storage/backups';
 import { planMutationBackup } from '../storage/mutation-backups';
 import type {
@@ -87,11 +87,11 @@ interface GuiProcessFactoryOptions {
 type GuiProcessFactory = (options: GuiProcessFactoryOptions) => GuiProcess;
 
 export interface GuiSubAgentManager {
-  onUpdate?: (subs: SubAgent[]) => void;
+  onUpdate?: (subs: FlueSubAgent[]) => void;
   onAllComplete?: (summary: string) => void;
   deploy(queries: string[]): Promise<void>;
   killAll(): void;
-  list(): SubAgent[];
+  list(): FlueSubAgent[];
 }
 
 export interface GuiUndoResult {
@@ -548,7 +548,7 @@ export class GuiRuntime {
     });
   }
 
-  private publishSubagents(subagents: SubAgent[]): void {
+  private publishSubagents(subagents: FlueSubAgent[]): void {
     this.store.append({
       subagents: subagents.map(toSubagentSnapshot),
       type: 'subagents.updated',
@@ -869,7 +869,7 @@ function parseSubagentDeployMarker(
   return queries.length === 0 ? undefined : { queries };
 }
 
-function toSubagentSnapshot(sub: SubAgent): GuiSubagentSnapshot {
+function toSubagentSnapshot(sub: FlueSubAgent): GuiSubagentSnapshot {
   return {
     durationMs: Math.max(0, Date.now() - sub.startTime),
     error: sub.error,

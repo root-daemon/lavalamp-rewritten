@@ -16,7 +16,6 @@ import type {
   PromptImage,
   QuestionRequestMsg,
 } from './ipc';
-import { SubAgentManager } from './subs';
 import { COLORS } from './theme';
 import type { Message } from './state';
 import { AppStateStore } from './storage/Store';
@@ -62,7 +61,8 @@ import {
   pasteImageFromClipboard,
 } from '../storage/clipboard';
 import { describeImageWithSpectacle } from '../storage/spectacle';
-import { openCodeViewer, openDiffViewer } from './viewers';
+import { openCodeViewer, openDiffViewer, openTextViewer } from './viewers';
+import { formatSubagentInspection } from './subagent-inspection';
 import { configPath, resolveConfig, updateConfig } from '../config/user-config';
 import { BUILD_MODEL, getModelEntry } from '../config/models';
 import { resolveRuntimeRoute, routeSummary } from '../config/runtime-route';
@@ -75,17 +75,24 @@ import {
 import {
   createModelPickerState,
   loadModelPickerModels,
+  modelSelection,
   moveModelPickerSelection,
-  selectedModelId,
+  selectedModel,
   type ModelPickerEntry,
   type ModelPickerState,
 } from './model-picker';
+import {
+  createLoginPickerState,
+  moveLoginPickerSelection,
+  selectedLoginBackend,
+  type LoginPickerState,
+} from './login-picker';
 import { mountInputStack } from './input-stack';
 import { attachmentsForPrompt, type AttachedImage } from './attachments';
 import { formatTuiError } from './errors';
 import { truncateToolResult } from '../tools/result-budget';
 import { parseBackend, type AgentBackend } from '../runtime/backend';
-import { createRuntimeProcess } from '../runtime/process';
+import { createRuntimeProcess, type RuntimeProcess } from '../runtime/process';
 import type { RuntimeEvent, RuntimeResult } from '../runtime/types';
 import { reconstructCodexMessages } from '../runtime/codex/history';
 import { isCodexLoginRequired } from '../runtime/codex/runtime';
@@ -239,13 +246,6 @@ export async function startTui(options: TuiOptions): Promise<void> {
   let activeStopReason: string | undefined;
   loadAutorun(cwd);
   const permissionRules = loadRules(cwd);
-  const subManager = new SubAgentManager(
-    options.serverPath,
-    options.cwd,
-    options.agentName ?? 'build',
-    analytics,
-    () => activeAnalyticsTurn,
-  );
   let contextTransferPending = false;
 
   const renderer: CliRenderer = await createCliRenderer({
@@ -274,7 +274,6 @@ export async function startTui(options: TuiOptions): Promise<void> {
         spinnerTimer = null;
       }
       clearInterval(lavaLampTimer);
-      subManager.killAll();
       flue.shutdown().catch(() => {});
     },
     screenMode: 'alternate-screen',
@@ -305,6 +304,30 @@ export async function startTui(options: TuiOptions): Promise<void> {
   });
 
   function wireRuntime(): void {
+    state.subAgents = flue.listSubagents();
+    refreshSubPanel();
+    updateStatus();
+    flue.setSubagentAnalytics?.(analytics, () => activeAnalyticsTurn);
+    flue.onSubagentsChanged = (subagents) => {
+      state.subAgents = subagents;
+      refreshSubPanel();
+      updateStatus();
+    };
+    flue.onSubagentsComplete = (summary) => {
+      refreshSubPanel();
+      const followUp = `The parallel research has completed. Here are the findings:\n\n${summary}\n\nPlease analyze these results and continue with your task.`;
+      if (state.processing) {
+        state.queuePending.push(withModeTag(followUp));
+      } else {
+        _sendPrompt(followUp).catch((error: unknown) => {
+          addInfoLine(
+            `  subagent follow-up failed: ${error instanceof Error ? error.message : String(error)}`,
+            COLORS.red,
+          );
+        });
+      }
+      refreshQueuePanel();
+    };
     flue.onPermissionRequest = (request: PermissionRequestMsg) => {
       (async () => {
         const choice = await permissionBoxMgr.show(request);
@@ -352,7 +375,6 @@ export async function startTui(options: TuiOptions): Promise<void> {
       if (questionBoxMgr.isVisible()) questionBoxMgr.hide({});
     };
   }
-  wireRuntime();
   root.flexDirection = 'column';
   root.width = '100%';
   root.height = '100%';
@@ -690,28 +712,6 @@ export async function startTui(options: TuiOptions): Promise<void> {
     subPanelMgr.refresh(state.subAgents, SPINNER_FRAMES, spinnerFrame);
   }
 
-  subManager.onUpdate = (subs) => {
-    state.subAgents = subs;
-    refreshSubPanel();
-    updateStatus();
-  };
-
-  subManager.onAllComplete = (summary) => {
-    refreshSubPanel();
-    const followUp = `The parallel research has completed. Here are the findings:\n\n${summary}\n\nPlease analyze these results and continue with your task.`;
-    if (state.processing) {
-      state.queuePending.push(withModeTag(followUp));
-    } else {
-      _sendPrompt(followUp).catch((error: unknown) => {
-        addInfoLine(
-          `  subagent follow-up failed: ${error instanceof Error ? error.message : String(error)}`,
-          COLORS.red,
-        );
-      });
-    }
-    refreshQueuePanel();
-  };
-
   const taskPanelMgr = new TaskPanelManager(boxCtx);
   const taskBox = taskPanelMgr.box;
 
@@ -1034,6 +1034,8 @@ export async function startTui(options: TuiOptions): Promise<void> {
       statusText.fg = sudo ? COLORS.pink : COLORS.gray;
     }
   }
+
+  wireRuntime();
 
   function applyModeVisuals() {
     updatePromptChar();
@@ -1480,8 +1482,8 @@ export async function startTui(options: TuiOptions): Promise<void> {
               deployMarker.type === 'parallel_deploy' &&
               Array.isArray(deployMarker.queries)
             ) {
-              subManager
-                .deploy(deployMarker.queries)
+              flue
+                .deploySubagents(deployMarker.queries)
                 .catch((error: unknown) =>
                   addInfoLine(
                     `  subagents failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -2155,7 +2157,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
         mode: 'tui',
         workspaceRoot: cwd,
       });
-      subManager.setAnalytics(analytics, () => activeAnalyticsTurn);
+      flue.setSubagentAnalytics?.(analytics, () => activeAnalyticsTurn);
       state.messages = messages;
       const usage = analytics.conversationUsage(currentSessionId);
       if (usage !== null) {
@@ -2197,6 +2199,111 @@ export async function startTui(options: TuiOptions): Promise<void> {
       });
     }
     showResultPanel('/sessions', rows);
+  }
+
+  async function withCodexRuntime<T>(
+    operation: (runtime: RuntimeProcess) => Promise<T>,
+  ): Promise<T> {
+    if (activeBackend === 'codex') {
+      return operation(flue);
+    }
+    const config = resolveConfig();
+    const runtime = createRuntimeProcess({
+      agentName: state.planMode ? 'plan' : baseAgentName,
+      allowModelFallback: true,
+      backend: 'codex',
+      cwd,
+      model: config.codexModel || undefined,
+      serverPath: options.serverPath,
+    });
+    try {
+      await runtime.start();
+      return await operation(runtime);
+    } finally {
+      await runtime.shutdown();
+    }
+  }
+
+  let loginPickerActive = false;
+  let loginPickerState: LoginPickerState | null = null;
+
+  function showLoginPicker() {
+    loginPickerState = createLoginPickerState();
+    loginPickerActive = true;
+    renderLoginPicker();
+  }
+
+  function closeLoginPicker() {
+    loginPickerActive = false;
+    loginPickerState = null;
+    hideResultPanel();
+  }
+
+  function renderLoginPicker() {
+    if (loginPickerState === null) {
+      return;
+    }
+    const rows: { content: string; fg?: string; bold?: boolean }[] = [
+      { bold: true, content: '  Choose a provider to log in:', fg: COLORS.white },
+      { content: '' },
+    ];
+    for (let index = 0; index < loginPickerState.entries.length; index++) {
+      const entry = loginPickerState.entries[index];
+      if (entry === undefined) {
+        continue;
+      }
+      const selected = index === loginPickerState.selectedIndex;
+      rows.push({
+        bold: selected,
+        content: `  ${selected ? '\u25B6 ' : '  '}${entry.label}`,
+        fg: selected ? accent() : COLORS.gray,
+      });
+    }
+    rows.push(
+      { content: '' },
+      { content: '  ↑/↓ select  Enter login  Esc cancel', fg: COLORS.dim },
+    );
+    showResultPanel('/login', rows);
+  }
+
+  async function loginToBackend(backend: AgentBackend): Promise<void> {
+    loginPickerActive = false;
+    loginPickerState = null;
+    const runLogin = async (runtime: RuntimeProcess) => {
+      await loginFromTui({
+        backend,
+        cloudflareLogin: () => cloudflareLogin({ allowManualPrompt: false }),
+        onProgress: (event) => {
+          const rows: { content: string; fg?: string }[] = [
+            {
+              content: `  ${event.message}`,
+              fg: event.tone === 'success' ? COLORS.green : COLORS.yellow,
+            },
+          ];
+          if (event.detail !== undefined) {
+            rows.push({ content: `  ${event.detail}`, fg: COLORS.link });
+          }
+          showResultPanel('/login', rows);
+        },
+        openBrowser,
+        runtime,
+      });
+    };
+
+    try {
+      if (backend === 'codex') {
+        await withCodexRuntime(runLogin);
+      } else {
+        await runLogin(flue);
+      }
+    } catch (error) {
+      showResultPanel('/login', [
+        {
+          content: `  ${error instanceof Error ? error.message : String(error)}`,
+          fg: COLORS.red,
+        },
+      ]);
+    }
   }
 
   let modelPickerActive = false;
@@ -2258,8 +2365,147 @@ export async function startTui(options: TuiOptions): Promise<void> {
     return true;
   }
 
-  function showModelPicker(models?: ModelPickerEntry[]) {
-    modelPickerState = createModelPickerState(currentModelId(), models);
+  function resetConversationState(sessionId: string): void {
+    currentSessionId = sessionId;
+    savedSessionOnExit = null;
+    state.messages = [];
+    lavaLampBox.visible = true;
+    void flue.clearSubagents();
+    analytics.finish('completed');
+    analytics.close();
+    activeAnalyticsTurn = undefined;
+    analytics = AnalyticsRecorder.create({
+      agent: baseAgentName,
+      conversationSessionId: currentSessionId,
+      mode: 'tui',
+      workspaceRoot: cwd,
+    });
+    flue.setSubagentAnalytics?.(analytics, () => activeAnalyticsTurn);
+    Object.assign(state.usageTotals, {
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+      input: 0,
+      output: 0,
+      totalTokens: 0,
+    });
+    renderAllMessages();
+  }
+
+  async function switchBackend(
+    nextBackend: AgentBackend,
+    requestedModel?: string,
+    panelTitle = '/backend',
+  ): Promise<boolean> {
+    if (state.processing) {
+      showResultPanel(panelTitle, [
+        {
+          content: '  cannot change backend while a prompt is running',
+          fg: COLORS.yellow,
+        },
+      ]);
+      return false;
+    }
+    if (nextBackend === activeBackend) {
+      return requestedModel === undefined ? true : setModel(requestedModel);
+    }
+
+    saveSessionSnapshot();
+    const previousBackend = activeBackend;
+    const previousModel = state.model;
+    const previousSessionId = currentSessionId;
+    const previousEnvironmentModel = process.env.LAVALAMP_MODEL;
+    const config = resolveConfig();
+    const nextModel = requestedModel ?? (nextBackend === 'codex'
+      ? config.codexModel || undefined
+      : config.defaultModel || undefined);
+    if (nextBackend === 'flue' && nextModel !== undefined) {
+      process.env.LAVALAMP_MODEL = nextModel;
+    }
+    const nextSessionId = `session_${Date.now()}`;
+    const nextRuntime = createRuntimeProcess({
+      agentName: state.planMode ? 'plan' : baseAgentName,
+      allowModelFallback: nextBackend === 'codex',
+      backend: nextBackend,
+      cwd,
+      model: nextModel,
+      serverPath: options.serverPath,
+      sessionId: nextSessionId,
+    });
+    let configUpdated = false;
+
+    try {
+      await flue.shutdown();
+      await nextRuntime.start();
+      if (nextBackend === 'codex') {
+        updateConfig({
+          backend: nextBackend,
+          ...(nextModel === undefined ? {} : { codexModel: nextModel }),
+        });
+      } else {
+        updateConfig({
+          backend: nextBackend,
+          ...(nextModel === undefined ? {} : { defaultModel: nextModel }),
+        });
+      }
+      configUpdated = true;
+      flue = nextRuntime;
+      activeBackend = nextBackend;
+      wireRuntime();
+      state.model = nextModel;
+      resetConversationState(nextSessionId);
+    } catch (error) {
+      activeBackend = previousBackend;
+      currentSessionId = previousSessionId;
+      state.model = previousModel;
+      if (previousEnvironmentModel === undefined) {
+        delete process.env.LAVALAMP_MODEL;
+      } else {
+        process.env.LAVALAMP_MODEL = previousEnvironmentModel;
+      }
+      if (configUpdated) {
+        updateConfig({
+          backend: previousBackend,
+          codexModel: config.codexModel,
+          defaultModel: config.defaultModel,
+        });
+      }
+      await nextRuntime.shutdown().catch(() => undefined);
+      flue = createRuntimeProcess({
+        agentName: state.planMode ? 'plan' : baseAgentName,
+        allowModelFallback: previousBackend === 'codex',
+        backend: previousBackend,
+        cwd,
+        model: previousModel,
+        serverPath: options.serverPath,
+        sessionId: previousSessionId,
+      });
+      await flue.start();
+      wireRuntime();
+      showResultPanel(panelTitle, [
+        {
+          content: `  backend switch failed: ${(error as Error).message}`,
+          fg: COLORS.red,
+        },
+      ]);
+      return false;
+    }
+    showResultPanel(panelTitle, [
+      {
+        content: `  ${nextBackend === 'codex' ? 'Codex' : 'Cloudflare'} model set: ${nextModel ?? 'default'}; started a clean session`,
+        fg: COLORS.green,
+      },
+    ]);
+    updateStatus();
+    return true;
+  }
+
+  function showModelPicker(models: ModelPickerEntry[]) {
+    modelPickerState = createModelPickerState(
+      currentModelId(),
+      activeBackend,
+      models,
+    );
     modelPickerActive = true;
     renderModelPicker();
   }
@@ -2321,16 +2567,16 @@ export async function startTui(options: TuiOptions): Promise<void> {
         continue;
       }
       const selected = i === picker.selectedIndex;
-      const isCurrent = model.id === current;
+      const isCurrent = model.backend === activeBackend && model.id === current;
       const marker = selected ? '\u25B6 ' : '  ';
       const currentTag = isCurrent ? ' current' : '';
-      if (activeBackend === 'codex') {
+      if (model.backend === 'codex') {
         const defaultTag = model.isDefault ? ' default' : '';
         const efforts = model.supportedReasoningEfforts?.join(', ') ||
           'server reasoning default';
         rows.push({
           bold: selected,
-          content: `  ${marker}${model.id} — ${efforts}${defaultTag}${currentTag}`,
+          content: `  ${marker}[Codex] ${model.id} — ${efforts}${defaultTag}${currentTag}`,
           fg: selected ? accent() : isCurrent ? COLORS.white : COLORS.gray,
         });
         continue;
@@ -2338,7 +2584,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
       const registryModel = getModelEntry(model.id);
       rows.push({
         bold: selected,
-        content: `  ${marker}${model.id}  ${registryModel?.vision ? 'vision' : 'text'} ${registryModel?.gatewaySupport ? 'gateway' : 'direct'}${currentTag}`,
+        content: `  ${marker}[Cloudflare] ${model.id}  ${registryModel?.vision ? 'vision' : 'text'} ${registryModel?.gatewaySupport ? 'gateway' : 'direct'}${currentTag}`,
         fg: selected ? accent() : isCurrent ? COLORS.white : COLORS.gray,
       });
     }
@@ -2350,11 +2596,14 @@ export async function startTui(options: TuiOptions): Promise<void> {
     if (picker === null) {
       return;
     }
-    const modelId = selectedModelId(picker);
-    if (modelId === undefined) {
+    const entry = selectedModel(picker);
+    if (entry === undefined) {
       return;
     }
-    const changed = await setModel(modelId);
+    const selection = modelSelection(activeBackend, entry);
+    const changed = selection.requiresBackendSwitch
+      ? await switchBackend(selection.backend, selection.modelId, '/model')
+      : await setModel(selection.modelId);
     if (changed) {
       modelPickerActive = false;
       modelPickerState = null;
@@ -2472,33 +2721,9 @@ export async function startTui(options: TuiOptions): Promise<void> {
         if (state.messages.length > 0) {
           saveSessionSnapshot();
         }
-        for (const child of messagesScroll.getChildren()) {
-          if (child.id !== 'lava-lamp-box') {
-            child.destroy();
-          }
-        }
-        lavaLampBox.visible = true;
-        state.messages = [];
-        currentSessionId = `session_${Date.now()}`;
+        await flue.clearSubagents();
         flue.clearThread?.();
-        subManager.killAll();
-        analytics.finish('completed');
-        analytics.close();
-        analytics = AnalyticsRecorder.create({
-          agent: baseAgentName,
-          conversationSessionId: currentSessionId,
-          mode: 'tui',
-          workspaceRoot: cwd,
-        });
-        subManager.setAnalytics(analytics, () => activeAnalyticsTurn);
-        Object.assign(state.usageTotals, {
-          cacheRead: 0,
-          cacheWrite: 0,
-          cost: 0,
-          input: 0,
-          output: 0,
-          totalTokens: 0,
-        });
+        resetConversationState(`session_${Date.now()}`);
         hideResultPanel();
         break;
       }
@@ -2580,10 +2805,30 @@ export async function startTui(options: TuiOptions): Promise<void> {
           await setModel(arg);
           break;
         }
-        const models = await loadModelPickerModels(activeBackend, async () =>
-          await flue.listModels?.() ?? [],
-        );
-        showModelPicker(models);
+        try {
+          const models = await loadModelPickerModels(() =>
+            withCodexRuntime(async (runtime) => {
+              if (runtime.listModels === undefined) {
+                throw new Error('Codex model catalog is unavailable');
+              }
+              return runtime.listModels();
+            })
+          );
+          if (models.length === 0) {
+            showResultPanel('/model', [
+              { content: '  no models are available', fg: COLORS.dim },
+            ]);
+            break;
+          }
+          showModelPicker(models);
+        } catch (error) {
+          showResultPanel('/model', [
+            {
+              content: `  failed to load models: ${(error as Error).message}`,
+              fg: COLORS.red,
+            },
+          ]);
+        }
         break;
       }
       case '/backend': {
@@ -2591,12 +2836,6 @@ export async function startTui(options: TuiOptions): Promise<void> {
           showResultPanel('/backend', [
             { content: `  backend: ${activeBackend}`, fg: COLORS.white },
             { content: '  usage: /backend flue|codex', fg: COLORS.dim },
-          ]);
-          break;
-        }
-        if (state.processing) {
-          showResultPanel('/backend', [
-            { content: '  cannot change backend while a prompt is running', fg: COLORS.yellow },
           ]);
           break;
         }
@@ -2615,85 +2854,20 @@ export async function startTui(options: TuiOptions): Promise<void> {
           ]);
           break;
         }
-        saveSessionSnapshot();
-        const previousBackend = activeBackend;
-        await flue.shutdown();
-        const config = resolveConfig();
-        const nextModel = nextBackend === 'codex'
-          ? config.codexModel || undefined
-          : config.defaultModel || undefined;
-        const nextRuntime = createRuntimeProcess({
-          agentName: state.planMode ? 'plan' : baseAgentName,
-          allowModelFallback: nextBackend === 'codex',
-          backend: nextBackend,
-          cwd,
-          model: nextModel,
-          serverPath: options.serverPath,
-          sessionId: `session_${Date.now()}`,
-        });
-        try {
-          await nextRuntime.start();
-          flue = nextRuntime;
-          activeBackend = nextBackend;
-          wireRuntime();
-          updateConfig({ backend: nextBackend });
-          currentSessionId = `session_${Date.now()}`;
-          savedSessionOnExit = null;
-          state.messages = [];
-          state.model = nextModel;
-          renderAllMessages();
-          showResultPanel('/backend', [
-            { content: `  backend set to ${nextBackend}; started a clean session`, fg: COLORS.green },
-          ]);
-        } catch (error) {
-          flue = createRuntimeProcess({
-            agentName: state.planMode ? 'plan' : baseAgentName,
-            backend: previousBackend,
-            cwd,
-            model: state.model,
-            serverPath: options.serverPath,
-            sessionId: currentSessionId,
-          });
-          await flue.start();
-          wireRuntime();
-          showResultPanel('/backend', [
-            { content: `  backend switch failed: ${(error as Error).message}`, fg: COLORS.red },
-          ]);
-        }
+        await switchBackend(nextBackend);
         break;
       }
       case '/login': {
-        try {
-          await loginFromTui({
-            backend: activeBackend,
-            cloudflareLogin: () =>
-              cloudflareLogin({ allowManualPrompt: false }),
-            onProgress: (event) => {
-              const rows: { content: string; fg?: string }[] = [
-                {
-                  content: `  ${event.message}`,
-                  fg:
-                    event.tone === 'success'
-                      ? COLORS.green
-                      : COLORS.yellow,
-                },
-              ];
-              if (event.detail !== undefined) {
-                rows.push({ content: `  ${event.detail}`, fg: COLORS.link });
-              }
-              showResultPanel('/login', rows);
-            },
-            openBrowser,
-            runtime: flue,
-          });
-        } catch (error) {
+        if (state.processing) {
           showResultPanel('/login', [
             {
-              content: `  ${error instanceof Error ? error.message : String(error)}`,
-              fg: COLORS.red,
+              content: '  cannot log in while a prompt is running',
+              fg: COLORS.yellow,
             },
           ]);
+          break;
         }
+        showLoginPicker();
         break;
       }
       case '/benchmark':
@@ -2950,18 +3124,39 @@ export async function startTui(options: TuiOptions): Promise<void> {
         break;
       }
       case '/subagents': {
+        if (arg.length > 0) {
+          const inspection = await flue.inspectSubagent(arg);
+          const viewerCtx = {
+            closeViewer,
+            cwd,
+            hideMainTui,
+            nextId,
+            onReadError: () => {},
+            overlay: viewerOverlay,
+            renderer,
+          };
+          openTextViewer(
+            viewerCtx,
+            `subagent ${inspection.subagent.name}`,
+            formatSubagentInspection(inspection),
+          );
+          break;
+        }
         const rows =
           state.subAgents.length === 0
             ? [{ content: '  no subagents', fg: COLORS.dim }]
-            : state.subAgents.map((sub) => ({
-                content: `  ${sub.id.padEnd(6)} ${sub.status.padEnd(9)} ${sub.query}`,
+            : [
+              ...state.subAgents.map((sub) => ({
+                content: `  ${sub.id} ${sub.status.padEnd(11)} ${sub.name}: ${sub.task}`,
                 fg:
                   sub.status === 'running'
                     ? COLORS.pink
-                    : sub.status === 'done'
+                    : sub.status === 'completed'
                       ? COLORS.green
                       : COLORS.red,
-              }));
+              })),
+              { content: '  Inspect with /subagents <id>', fg: COLORS.dim },
+            ];
         showResultPanel('/subagents', rows);
         break;
       }
@@ -3159,7 +3354,14 @@ export async function startTui(options: TuiOptions): Promise<void> {
     resultPanel: resultPanelMgr,
     store,
     subBox: subPanelMgr,
-    subManager,
+    stopSubagent: (id: string) => {
+      flue.stopSubagent(id).catch((error: unknown) => {
+        addInfoLine(
+          `  could not stop subagent: ${error instanceof Error ? error.message : String(error)}`,
+          COLORS.red,
+        );
+      });
+    },
     togglePlanMode,
     updateStatus,
     viewerOverlay,
@@ -3182,6 +3384,33 @@ export async function startTui(options: TuiOptions): Promise<void> {
           }
         })
         .catch(() => {});
+    }
+    if (loginPickerActive && loginPickerState !== null) {
+      if (key.name === 'up' || (key.name === 'k' && !key.ctrl)) {
+        moveLoginPickerSelection(loginPickerState, -1);
+        renderLoginPicker();
+        key.stopPropagation();
+        return;
+      }
+      if (key.name === 'down' || (key.name === 'j' && !key.ctrl)) {
+        moveLoginPickerSelection(loginPickerState, 1);
+        renderLoginPicker();
+        key.stopPropagation();
+        return;
+      }
+      if (key.name === 'return') {
+        const backend = selectedLoginBackend(loginPickerState);
+        if (backend !== undefined) {
+          void loginToBackend(backend);
+        }
+        key.stopPropagation();
+        return;
+      }
+      if (key.name === 'escape') {
+        closeLoginPicker();
+        key.stopPropagation();
+        return;
+      }
     }
     if (modelPickerActive && modelPickerState !== null) {
       if (key.name === 'up' || (key.name === 'k' && !key.ctrl)) {
