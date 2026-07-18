@@ -36,6 +36,17 @@ if (subcommand === 'config' || subcommand === 'models') {
   await import('./cli/config');
   process.exit(0);
 }
+if (subcommand === 'benchmark' || subcommand === 'benchmarks') {
+  const { runBenchmarkCommand } = await import('./cli/benchmark');
+  process.exit(
+    await runBenchmarkCommand({
+      args: process.argv.slice(3),
+      model,
+      version,
+      workspaceRoot,
+    }),
+  );
+}
 
 const repoRoot = resolve(import.meta.dir, '..');
 let serverPath = join(repoRoot, 'dist', 'server.mjs');
@@ -87,6 +98,8 @@ USAGE:
   lavalamp --workspace /path     Set workspace directory (default: cwd)
   lavalamp --model MODEL         Override default model
   lavalamp models                List known models
+  lavalamp benchmark list        List public and custom benchmark data
+  lavalamp benchmark run SUITE   Run a public or custom benchmark
   lavalamp update                Download and install the latest release
   lavalamp config show           Show persisted config
   lavalamp config set KEY VALUE  Persist model/Gateway config

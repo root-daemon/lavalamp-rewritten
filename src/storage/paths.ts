@@ -174,6 +174,14 @@ export function workspaceDataDir(workspaceRoot: string): string {
   return path.join(lavalampDataDir(), 'workspaces', `${name}-${hash}`);
 }
 
+export function benchmarkCacheDir(): string {
+  return path.join(lavalampDataDir(), 'benchmarks', 'catalog');
+}
+
+export function benchmarkWorkspaceDir(workspaceRoot: string): string {
+  return path.join(workspaceDataDir(workspaceRoot), 'benchmarks');
+}
+
 export function skillDirs(workspaceRoot: string): string[] {
   const dirs = [
     path.join(path.resolve(workspaceRoot), '.agents', 'skills'),

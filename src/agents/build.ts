@@ -42,6 +42,10 @@ import { createTaskTools } from '../tools/task-tools';
 import { wrapToolExecute } from '../permissions/middleware';
 import { loadAutorun } from '../permissions/autorun';
 import { withResultBudget } from '../tools/result-budget';
+import {
+  applyAgentProfileToTools,
+  runtimeAgentProfile,
+} from '../benchmarks/runtime-profile';
 
 ensureProviders();
 
@@ -78,6 +82,9 @@ export default createAgent((ctx) => {
   );
 
   const memoryContext = getMemoryContext(workspaceRoot as string);
+  const benchmarkProfile = runtimeAgentProfile(
+    ctx.env as Record<string, string | undefined>,
+  );
 
   const instructions = [
     'You are lavalamp — a coding assistant that operates on real files in the workspace.',
@@ -184,9 +191,48 @@ export default createAgent((ctx) => {
   if (memoryContext !== null) {
     instructions.push('', memoryContext);
   }
+  if (benchmarkProfile !== null) {
+    instructions.push(
+      '',
+      '## Benchmark agent profile',
+      `- Profile: ${benchmarkProfile.name} (${benchmarkProfile.fingerprint})`,
+      `- ${benchmarkProfile.instructions}`,
+      `- Use no more than ${benchmarkProfile.maxSubagents} subagents.`,
+    );
+  }
+
+  const tools = [
+    customReadTool,
+    gate(createWriteTool(tracker)),
+    gate(createEditTool(tracker)),
+    gate(createRenameTool(tracker, workspaceRoot as string)),
+    gate(createUndoTool(tracker)),
+    createHistoryTool(tracker),
+    createSessionsTool(),
+    createSessionContextTool(),
+    createPullSessionTool(),
+    ...createMemoryTools(workspaceRoot as string).map((t: ToolDefinition) =>
+      ['memory_write', 'memory_append'].includes(t.name) ? gate(t) : t,
+    ),
+    createWebSearchTool(),
+    createFetchUrlTool(),
+    createDeepWikiTool(),
+    createCodebaseSearchTool(guard),
+    gate(createOracleTool()),
+    gate(createDoomLoopTool()),
+    createRipgrepTool(workspaceRoot as string),
+    gate(createDeployParallelSubsTool()),
+    createLoadSkillTool(workspaceRoot as string),
+    createCodebaseSemanticSearchTool(workspaceRoot as string),
+    createCodebaseGraphTool(workspaceRoot as string),
+    ...createLspTools(workspaceRoot as string),
+    createQueryExpertTool(workspaceRoot as string),
+    ...createTaskTools(taskStore),
+    createAskQuestionTool(),
+  ];
 
   return {
-    compaction: {
+    compaction: benchmarkProfile?.compaction ?? {
       keepRecentTokens: 8000,
       reserveTokens: 20_000,
     },
@@ -195,34 +241,6 @@ export default createAgent((ctx) => {
     model,
     sandbox: local({ env: { PATH: process.env.PATH ?? '' } }),
     thinkingLevel: 'medium',
-    tools: [
-      customReadTool,
-      gate(createWriteTool(tracker)),
-      gate(createEditTool(tracker)),
-      gate(createRenameTool(tracker, workspaceRoot as string)),
-      gate(createUndoTool(tracker)),
-      createHistoryTool(tracker),
-      createSessionsTool(),
-      createSessionContextTool(),
-      createPullSessionTool(),
-      ...createMemoryTools(workspaceRoot as string).map((t: ToolDefinition) =>
-        ['memory_write', 'memory_append'].includes(t.name) ? gate(t) : t,
-      ),
-      createWebSearchTool(),
-      createFetchUrlTool(),
-      createDeepWikiTool(),
-      createCodebaseSearchTool(guard),
-      gate(createOracleTool()),
-      gate(createDoomLoopTool()),
-      createRipgrepTool(workspaceRoot as string),
-      gate(createDeployParallelSubsTool()),
-      createLoadSkillTool(workspaceRoot as string),
-      createCodebaseSemanticSearchTool(workspaceRoot as string),
-      createCodebaseGraphTool(workspaceRoot as string),
-      ...createLspTools(workspaceRoot as string),
-      createQueryExpertTool(workspaceRoot as string),
-      ...createTaskTools(taskStore),
-      createAskQuestionTool(),
-    ].map(budget),
+    tools: applyAgentProfileToTools(tools, benchmarkProfile).map(budget),
   };
 });
