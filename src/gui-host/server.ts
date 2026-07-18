@@ -1,12 +1,21 @@
 import type { GuiPermissionDecision } from './contracts';
 import type { GuiMessageSnapshot } from './contracts';
+import type { GuiCommandResult } from './contracts';
 import type { GuiEventStore } from './event-store';
+import { parseBackend, type AgentBackend } from '../runtime/backend';
+import type { RuntimeMode, RuntimeModel } from '../runtime/types';
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
 export interface GuiHostRuntime {
   readonly store: GuiEventStore;
   submitPrompt(prompt: string, sessionId?: string): string;
+  setMode?(mode: RuntimeMode): Promise<void>;
+  setBackend?(backend: AgentBackend): Promise<void>;
+  setModel?(model: string): Promise<void>;
+  compact?(): Promise<void>;
+  undo?(): Promise<void>;
+  listModels?(): Promise<RuntimeModel[]>;
   respondPermission(requestId: string, decision: GuiPermissionDecision): void;
   respondQuestion(
     requestId: string,
@@ -23,8 +32,9 @@ export interface GuiHostServerOptions {
   hostname?: string;
   port?: number;
   listSessions?: () => unknown[];
-  listModels?: () => unknown[];
+  listModels?: () => unknown[] | Promise<unknown[]>;
   loadSession?: (sessionId: string) => GuiMessageSnapshot[] | null;
+  runCommand?: (command: string) => Promise<GuiCommandResult> | GuiCommandResult;
 }
 
 function json(data: unknown, status = 200): Response {
@@ -81,6 +91,18 @@ function isPermissionDecision(value: unknown): value is GuiPermissionDecision {
   return value === 'allow' || value === 'always_allow' || value === 'deny';
 }
 
+function isRuntimeMode(value: unknown): value is RuntimeMode {
+  return value === 'build' || value === 'ask' || value === 'plan';
+}
+
+async function modelList(options: GuiHostServerOptions): Promise<unknown[]> {
+  const runtimeModels = await options.runtime.listModels?.();
+  if (runtimeModels !== undefined && runtimeModels.length > 0) {
+    return runtimeModels;
+  }
+  return (await options.listModels?.()) ?? [];
+}
+
 export function createGuiHostServer(
   options: GuiHostServerOptions,
 ): Bun.Server<undefined> {
@@ -105,10 +127,62 @@ export function createGuiHostServer(
       try {
         if (url.pathname === '/v1/native/snapshot' && request.method === 'GET') {
           return success({
-            models: options.listModels?.() ?? [],
+            models: await modelList(options),
             sessions: options.listSessions?.() ?? [],
             snapshot: options.runtime.store.snapshot(),
           });
+        }
+
+        if (url.pathname === '/v1/native/control' && request.method === 'POST') {
+          const body = await parseBody(request);
+          if (!body.ok) return body.response;
+          const action = body.value.action;
+          try {
+            if (action === 'mode') {
+              if (!isRuntimeMode(body.value.mode)) {
+                return failure('invalid_mode', 'mode must be build, ask, or plan', 400);
+              }
+              await options.runtime.setMode?.(body.value.mode);
+              return success({ mode: body.value.mode });
+            }
+            if (action === 'backend') {
+              let backend: AgentBackend | null = null;
+              if (typeof body.value.backend === 'string') {
+                try {
+                  backend = parseBackend(body.value.backend) ?? null;
+                } catch {
+                  backend = null;
+                }
+              }
+              if (backend === null) {
+                return failure('invalid_backend', 'backend must be flue or codex', 400);
+              }
+              await options.runtime.setBackend?.(backend);
+              return success({ backend });
+            }
+            if (action === 'model') {
+              if (typeof body.value.model !== 'string' || body.value.model.length === 0) {
+                return failure('invalid_model', 'model must be a non-empty string', 400);
+              }
+              await options.runtime.setModel?.(body.value.model);
+              return success({ model: body.value.model });
+            }
+            if (action === 'compact') {
+              await options.runtime.compact?.();
+              return success({ compacted: true });
+            }
+            if (action === 'undo') {
+              await options.runtime.undo?.();
+              return success({ undone: true });
+            }
+          } catch (error) {
+            return failure(
+              'control_failed',
+              error instanceof Error ? error.message : String(error),
+              409,
+            );
+          }
+          return failure('invalid_action', 'Unsupported control action', 400);
         }
 
         if (url.pathname === '/v1/native/prompts' && request.method === 'POST') {
@@ -126,6 +200,24 @@ export function createGuiHostServer(
           const sessionId = request.headers.get('x-lavalamp-session') ?? undefined;
           const requestId = options.runtime.submitPrompt(prompt, sessionId);
           return success({ requestId }, 202);
+        }
+
+        if (url.pathname === '/v1/native/commands' && request.method === 'POST') {
+          const declaredLength = Number(request.headers.get('content-length') ?? '0');
+          if (declaredLength > MAX_BODY_BYTES) {
+            return failure('body_too_large', 'Request body exceeds 1 MiB', 413);
+          }
+          const command = await request.text();
+          if (new TextEncoder().encode(command).byteLength > MAX_BODY_BYTES) {
+            return failure('body_too_large', 'Request body exceeds 1 MiB', 413);
+          }
+          if (!command.trim().startsWith('/')) {
+            return failure('invalid_command', 'command must start with /', 400);
+          }
+          if (options.runCommand === undefined) {
+            return failure('command_unavailable', 'GUI command handler is unavailable', 501);
+          }
+          return success(await options.runCommand(command));
         }
 
         if (url.pathname === '/v1/events' && request.method === 'GET') {
@@ -215,7 +307,7 @@ export function createGuiHostServer(
         }
 
         if (url.pathname === '/v1/models' && request.method === 'GET') {
-          return success(options.listModels?.() ?? []);
+          return success(await modelList(options));
         }
 
         return failure('not_found', 'Route not found', 404);

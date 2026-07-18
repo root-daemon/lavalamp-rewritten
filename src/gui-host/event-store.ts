@@ -76,9 +76,28 @@ export class GuiEventStore {
       case 'host.ready':
         this.current = {
           ...this.current,
+          backend: event.backend,
+          mode: event.mode,
           workspace: event.workspace,
           model: event.model,
         };
+        break;
+      case 'backend.changed':
+        this.current = {
+          ...this.current,
+          backend: event.backend,
+          mode: event.mode,
+          model: event.model,
+        };
+        break;
+      case 'mode.changed':
+        this.current = { ...this.current, mode: event.mode };
+        break;
+      case 'model.changed':
+        this.current = { ...this.current, model: event.model };
+        break;
+      case 'notice':
+        this.current = { ...this.current, error: undefined };
         break;
       case 'user.message':
         this.current = {
@@ -186,6 +205,7 @@ export class GuiEventStore {
                   { content: this.current.assistantText, role: 'assistant' as const },
                 ].slice(-80)
               : this.current.messages,
+          backend: event.backend ?? this.current.backend,
           model: event.model ?? this.current.model,
           processing: false,
           provider: event.provider,
@@ -205,6 +225,48 @@ export class GuiEventStore {
       default:
         break;
     }
+  }
+
+  resetConversation(): void {
+    this.current = {
+      ...this.current,
+      assistantText: '',
+      error: undefined,
+      messages: [],
+      pendingPermission: undefined,
+      pendingQuestion: undefined,
+      processing: false,
+      terminalOutput: '',
+      thinkingText: '',
+      tools: [],
+      usage: { ...EMPTY_USAGE },
+    };
+  }
+
+  compactMessages(): void {
+    const half = Math.ceil(this.current.messages.length / 2);
+    this.current = {
+      ...this.current,
+      messages: this.current.messages.slice(half),
+      thinkingText: '',
+      terminalOutput: '',
+    };
+  }
+
+  undoLastTurn(): void {
+    const next = [...this.current.messages];
+    for (let i = 0; i < 2 && next.length > 0; i++) {
+      next.pop();
+    }
+    this.current = {
+      ...this.current,
+      assistantText: '',
+      error: undefined,
+      messages: next,
+      processing: false,
+      thinkingText: '',
+      tools: [],
+    };
   }
 }
 

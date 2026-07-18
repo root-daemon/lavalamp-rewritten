@@ -35,7 +35,6 @@ class FakeRuntime implements GuiHostRuntime {
 }
 
 const servers: Array<{ stop(closeActiveConnections?: boolean): void }> = [];
-let nextPort = 42_000 + (process.pid % 1_000);
 afterEach(() => {
   for (const server of servers.splice(0)) server.stop(true);
 });
@@ -50,7 +49,11 @@ function fixture() {
       sessionId === 'session-a'
         ? [{ content: 'Fix tests', role: 'user' as const }]
         : null,
-    port: nextPort++,
+    port: 0,
+    runCommand: (command) => ({
+      rows: [`handled ${command}`],
+      title: command.split(/\s+/)[0] ?? '/command',
+    }),
     runtime,
     token: 'secret-token',
     workspace: '/repo',
@@ -187,6 +190,20 @@ describe('GUI host server', () => {
         sessions: [{ sessionId: 'session-a' }],
         snapshot: { processing: true },
       },
+    });
+  });
+
+  test('runs native slash commands through authenticated host API', async () => {
+    const { request } = fixture();
+    const command = await request('/v1/native/commands', {
+      body: '/usage',
+      headers: { 'content-type': 'text/plain' },
+      method: 'POST',
+    });
+    expect(command.status).toBe(200);
+    expect(await command.json()).toMatchObject({
+      data: { rows: ['handled /usage'], title: '/usage' },
+      ok: true,
     });
   });
 });

@@ -1,4 +1,5 @@
-import type { FlueEvent } from '../tui/ipc';
+import type { AgentBackend } from '../runtime/backend';
+import type { RuntimeEvent, RuntimeMode } from '../runtime/types';
 
 export interface GuiUsage {
   input: number;
@@ -12,12 +13,22 @@ export interface GuiUsage {
 export type GuiPermissionDecision = 'allow' | 'always_allow' | 'deny';
 
 export type GuiEventInput =
-  | { type: 'host.ready'; workspace: string; model?: string }
+  | {
+      type: 'host.ready';
+      workspace: string;
+      backend: AgentBackend;
+      mode: RuntimeMode;
+      model?: string;
+    }
+  | { type: 'backend.changed'; backend: AgentBackend; mode: RuntimeMode; model?: string }
+  | { type: 'mode.changed'; mode: RuntimeMode }
+  | { type: 'model.changed'; model: string }
+  | { type: 'notice'; message: string }
   | { type: 'user.message'; content: string }
   | { type: 'turn.started' }
   | { type: 'text.delta'; delta: string }
   | { type: 'thinking.delta'; delta: string }
-  | { type: 'runtime.event'; event: FlueEvent }
+  | { type: 'runtime.event'; event: RuntimeEvent }
   | {
       type: 'tool.started';
       toolCallId: string;
@@ -45,7 +56,13 @@ export type GuiEventInput =
     }
   | { type: 'question.requested'; requestId: string; questions: unknown[] }
   | { type: 'question.resolved'; requestId: string }
-  | { type: 'turn.completed'; usage: GuiUsage; model?: string; provider?: string }
+  | {
+      type: 'turn.completed';
+      usage: GuiUsage;
+      backend?: AgentBackend;
+      model?: string;
+      provider?: string;
+    }
   | { type: 'turn.failed'; message: string }
   | { type: 'turn.cancelled' };
 
@@ -71,6 +88,8 @@ export interface GuiSnapshot {
   assistantText: string;
   thinkingText: string;
   terminalOutput: string;
+  backend?: AgentBackend;
+  mode?: RuntimeMode;
   workspace?: string;
   model?: string;
   provider?: string;
@@ -94,6 +113,11 @@ export interface GuiToolSnapshot {
   status: 'running' | 'completed' | 'failed';
   isError: boolean;
   durationMs?: number;
+}
+
+export interface GuiCommandResult {
+  title: string;
+  rows: string[];
 }
 
 export interface GuiApiError {

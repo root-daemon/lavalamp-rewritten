@@ -54,7 +54,7 @@
       <row height="56" padding="16" gap="10" cross="center" window-drag="true">
         <column gap="1" grow="1">
           <text>Agent Session</text>
-          <text foreground="text_muted">{providerLabel} · {modelLabel}</text>
+          <text foreground="text_muted">{backendLabel} · {modeLabel} · {modelLabel}</text>
         </column>
         <badge variant="secondary">{connectionLabel}</badge>
         <stack>
@@ -68,6 +68,23 @@
         <column padding="24" gap="20">
           <if test="{hasError}">
             <alert variant="destructive">{errorText}</alert>
+          </if>
+
+          <if test="{hasCommandResult}">
+            <panel padding="14">
+              <column gap="10">
+                <row gap="8" cross="center">
+                  <icon name="terminal" size="sm" />
+                  <text>{commandTitle}</text>
+                </row>
+                <separator />
+                <column gap="5">
+                  <for each="commandRows" key="id" as="row">
+                    <text wrap="true" foreground="text_muted">{row.text}</text>
+                  </for>
+                </column>
+              </column>
+            </panel>
           </if>
 
           <if test="{emptyState}">
@@ -182,13 +199,49 @@
 
         <scroll grow="1" label="Run activity">
           <column padding="16" gap="18">
+            <column gap="8">
+              <text foreground="text_muted">Command Center</text>
+              <button-group gap="4">
+                <button size="sm" variant="secondary" on-press="mode_build">Build</button>
+                <button size="sm" variant="secondary" on-press="mode_ask">Ask</button>
+                <button size="sm" variant="secondary" on-press="mode_plan">Plan</button>
+              </button-group>
+              <button-group gap="4">
+                <button size="sm" variant="ghost" on-press="backend_flue">Flue</button>
+                <button size="sm" variant="ghost" on-press="backend_codex">Codex</button>
+              </button-group>
+              <row gap="6">
+                <button grow="1" size="sm" variant="ghost" on-press="command_help">Help</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_models">Models</button>
+              </row>
+              <row gap="6">
+                <button grow="1" size="sm" variant="ghost" on-press="command_sessions">Sessions</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_permissions">Permissions</button>
+              </row>
+              <row gap="6">
+                <button grow="1" size="sm" variant="ghost" on-press="command_tools">Tools</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_analytics">Analytics</button>
+              </row>
+              <row gap="6">
+                <button grow="1" size="sm" variant="ghost" on-press="command_benchmarks">Benchmarks</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_usage">Usage</button>
+              </row>
+              <button-group gap="4">
+                <button size="sm" variant="ghost" on-press="command_compact">Compact</button>
+                <button size="sm" variant="ghost" on-press="command_undo">Undo</button>
+                <button size="sm" variant="ghost" on-press="command_copy">Copy</button>
+              </button-group>
+            </column>
+
+            <separator />
+
             <column gap="7">
               <text foreground="text_muted">Runtime</text>
               <row gap="8" cross="center">
                 <icon name="circle-dot" size="sm" />
                 <column gap="2" grow="1">
                   <text>{modelLabel}</text>
-                  <text foreground="text_muted">{providerLabel}</text>
+                  <text foreground="text_muted">{providerLabel} · {backendLabel} · {modeLabel}</text>
                 </column>
               </row>
             </column>

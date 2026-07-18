@@ -41,9 +41,11 @@ pub const poll_timer_key: u64 = 101;
 const poll_fetch_key: u64 = 102;
 const action_fetch_key: u64 = 103;
 const session_fetch_key: u64 = 104;
+const command_fetch_key: u64 = 105;
 const max_messages = 40;
 const max_tools = 24;
 const max_sessions = 16;
+const max_command_rows = 48;
 
 const Role = enum { user, assistant };
 
@@ -106,15 +108,31 @@ pub const Session = struct {
     }
 };
 
+pub const CommandRow = struct {
+    id: u64 = 0,
+    storage: [512]u8 = undefined,
+    len: usize = 0,
+
+    pub fn text(self: *const CommandRow) []const u8 {
+        return self.storage[0..self.len];
+    }
+
+    fn set(self: *CommandRow, id: u64, row_text: []const u8) void {
+        self.id = id;
+        self.len = copyText(&self.storage, row_text);
+    }
+};
+
 pub const Model = struct {
     pub const view_unbound = .{
         "connected", "cursor", "host_port", "auth_token_storage", "auth_token_len",
         "draft", "assistant_storage", "assistant_len", "thinking_storage", "thinking_len",
         "terminal_storage", "terminal_len", "error_storage", "error_len",
         "workspace_storage", "workspace_len", "model_storage", "model_len",
-        "provider_storage", "provider_len", "permission_id_storage", "permission_id_len",
+        "provider_storage", "provider_len", "backend_storage", "backend_len", "mode_storage", "mode_len", "permission_id_storage", "permission_id_len",
         "permission_tool_storage", "permission_tool_len", "messages", "message_count",
-        "tools", "tool_count", "sessions", "session_count", "selected_session_key", "total_tokens", "total_cost", "assistantText", "authToken",
+        "tools", "tool_count", "sessions", "session_count", "selected_session_key", "command_title_storage", "command_title_len",
+        "command_rows", "command_row_count", "total_tokens", "total_cost", "assistantText", "authToken",
         "permissionId", "hasMessages",
     };
 
@@ -139,6 +157,10 @@ pub const Model = struct {
     model_len: usize = 0,
     provider_storage: [96]u8 = undefined,
     provider_len: usize = 0,
+    backend_storage: [24]u8 = undefined,
+    backend_len: usize = 0,
+    mode_storage: [24]u8 = undefined,
+    mode_len: usize = 0,
     permission_pending: bool = false,
     permission_id_storage: [128]u8 = undefined,
     permission_id_len: usize = 0,
@@ -151,6 +173,10 @@ pub const Model = struct {
     sessions: [max_sessions]Session = [_]Session{.{}} ** max_sessions,
     session_count: usize = 0,
     selected_session_key: u64 = 0,
+    command_title_storage: [96]u8 = undefined,
+    command_title_len: usize = 0,
+    command_rows: [max_command_rows]CommandRow = [_]CommandRow{.{}} ** max_command_rows,
+    command_row_count: usize = 0,
     total_tokens: u64 = 0,
     total_cost: f64 = 0,
 
@@ -181,6 +207,14 @@ pub const Model = struct {
         if (self.provider_len == 0) return "Connecting";
         return self.provider_storage[0..self.provider_len];
     }
+    pub fn backendLabel(self: *const Model) []const u8 {
+        if (self.backend_len == 0) return "flue";
+        return self.backend_storage[0..self.backend_len];
+    }
+    pub fn modeLabel(self: *const Model) []const u8 {
+        if (self.mode_len == 0) return "build";
+        return self.mode_storage[0..self.mode_len];
+    }
     pub fn authToken(self: *const Model) []const u8 {
         return self.auth_token_storage[0..self.auth_token_len];
     }
@@ -189,6 +223,12 @@ pub const Model = struct {
     }
     pub fn permissionTool(self: *const Model) []const u8 {
         return self.permission_tool_storage[0..self.permission_tool_len];
+    }
+    pub fn commandTitle(self: *const Model) []const u8 {
+        return self.command_title_storage[0..self.command_title_len];
+    }
+    pub fn commandRows(self: *const Model) []const CommandRow {
+        return self.command_rows[0..self.command_row_count];
     }
     pub fn messageItems(self: *const Model) []const Message {
         return self.messages[0..self.message_count];
@@ -217,6 +257,9 @@ pub const Model = struct {
     pub fn hasTools(self: *const Model) bool {
         return self.tool_count > 0;
     }
+    pub fn hasCommandResult(self: *const Model) bool {
+        return self.command_row_count > 0;
+    }
     pub fn usageLabel(self: *const Model, arena: std.mem.Allocator) []const u8 {
         return std.fmt.allocPrint(arena, "{d} tokens · ${d:.4}", .{ self.total_tokens, self.total_cost }) catch "Usage unavailable";
     }
@@ -243,6 +286,10 @@ pub const Model = struct {
     pub fn setAuthToken(self: *Model, text: []const u8) void {
         self.auth_token_len = copyText(&self.auth_token_storage, text);
     }
+    pub fn clearCommandResult(self: *Model) void {
+        self.command_title_len = 0;
+        self.command_row_count = 0;
+    }
 };
 
 pub const Msg = union(enum) {
@@ -251,6 +298,22 @@ pub const Msg = union(enum) {
     cancel,
     new_chat,
     select_session: u64,
+    command_help,
+    command_sessions,
+    command_models,
+    command_permissions,
+    command_tools,
+    command_usage,
+    command_analytics,
+    command_benchmarks,
+    command_compact,
+    command_undo,
+    command_copy,
+    mode_build,
+    mode_ask,
+    mode_plan,
+    backend_flue,
+    backend_codex,
     allow_permission,
     always_allow_permission,
     deny_permission,
@@ -260,8 +323,9 @@ pub const Msg = union(enum) {
     snapshot_response: native_sdk.EffectResponse,
     action_response: native_sdk.EffectResponse,
     session_response: native_sdk.EffectResponse,
+    command_response: native_sdk.EffectResponse,
 
-    pub const view_unbound = .{ "host_line", "host_exit", "poll_tick", "snapshot_response", "action_response", "session_response" };
+    pub const view_unbound = .{ "host_line", "host_exit", "poll_tick", "snapshot_response", "action_response", "session_response", "command_response" };
 };
 
 pub const Effects = native_sdk.Effects(Msg);
@@ -297,9 +361,26 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.terminal_len = 0;
             model.error_len = 0;
             model.selected_session_key = 0;
+            model.clearCommandResult();
             for (model.sessions[0..model.session_count]) |*session| session.selected = false;
         },
         .select_session => |key| selectSession(model, key, fx),
+        .command_help => sendCommand(model, fx, "/help"),
+        .command_sessions => sendCommand(model, fx, "/sessions"),
+        .command_models => sendCommand(model, fx, "/models"),
+        .command_permissions => sendCommand(model, fx, "/permissions"),
+        .command_tools => sendCommand(model, fx, "/tools"),
+        .command_usage => sendCommand(model, fx, "/usage"),
+        .command_analytics => sendCommand(model, fx, "/analytics"),
+        .command_benchmarks => sendCommand(model, fx, "/benchmarks"),
+        .command_compact => sendCommand(model, fx, "/compact"),
+        .command_undo => sendCommand(model, fx, "/undo"),
+        .command_copy => sendCommand(model, fx, "/copy"),
+        .mode_build => sendCommand(model, fx, "/build"),
+        .mode_ask => sendCommand(model, fx, "/ask"),
+        .mode_plan => sendCommand(model, fx, "/plan"),
+        .backend_flue => sendCommand(model, fx, "/backend flue"),
+        .backend_codex => sendCommand(model, fx, "/backend codex"),
         .allow_permission => resolvePermission(model, fx, "allow"),
         .always_allow_permission => resolvePermission(model, fx, "always_allow"),
         .deny_permission => resolvePermission(model, fx, "deny"),
@@ -330,6 +411,13 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 return;
             }
             if (!applySessionJson(model, response.body)) setError(model, "Invalid session response");
+        },
+        .command_response => |response| {
+            if (response.outcome != .ok or response.status < 200 or response.status >= 300) {
+                setError(model, "Lavalamp command failed");
+                return;
+            }
+            if (!applyCommandJson(model, response.body)) setError(model, "Invalid command response");
         },
     }
 }
@@ -377,6 +465,11 @@ fn fetchSnapshot(model: *const Model, fx: *Effects) void {
 
 fn sendPrompt(model: *Model, fx: *Effects) void {
     if (model.sendDisabled()) return;
+    const draft_text = model.draft.text();
+    if (std.mem.startsWith(u8, std.mem.trim(u8, draft_text, " \t\r\n"), "/")) {
+        sendCommand(model, fx, draft_text);
+        return;
+    }
     var url_buffer: [160]u8 = undefined;
     var auth_buffer: [192]u8 = undefined;
     var headers: [3]std.http.Header = undefined;
@@ -398,6 +491,27 @@ fn sendPrompt(model: *Model, fx: *Effects) void {
         .on_response = Effects.responseMsg(.action_response),
     });
     model.processing = true;
+    model.draft.clear();
+    model.clearCommandResult();
+    model.error_len = 0;
+}
+
+fn sendCommand(model: *Model, fx: *Effects, command: []const u8) void {
+    var url_buffer: [160]u8 = undefined;
+    var auth_buffer: [192]u8 = undefined;
+    const headers = [_]std.http.Header{
+        .{ .name = "authorization", .value = authHeader(model, &auth_buffer) },
+        .{ .name = "content-type", .value = "text/plain; charset=utf-8" },
+    };
+    fx.fetch(.{
+        .key = command_fetch_key,
+        .method = .POST,
+        .url = endpoint(model, &url_buffer, "/v1/native/commands"),
+        .headers = &headers,
+        .body = command,
+        .timeout_ms = 10_000,
+        .on_response = Effects.responseMsg(.command_response),
+    });
     model.draft.clear();
     model.error_len = 0;
 }
@@ -500,6 +614,8 @@ const SnapshotPayload = struct {
     workspace: ?[]const u8 = null,
     model: ?[]const u8 = null,
     provider: ?[]const u8 = null,
+    backend: ?[]const u8 = null,
+    mode: ?[]const u8 = null,
     @"error": ?[]const u8 = null,
     pendingPermission: ?PendingPermissionPayload = null,
     usage: UsagePayload = .{},
@@ -519,6 +635,11 @@ const SessionData = struct {
     messages: []const MessagePayload = &.{},
 };
 const SessionEnvelope = struct { ok: bool = false, data: ?SessionData = null };
+const CommandData = struct {
+    title: []const u8 = "",
+    rows: []const []const u8 = &.{},
+};
+const CommandEnvelope = struct { ok: bool = false, data: ?CommandData = null };
 
 pub fn applySessionJson(model: *Model, body: []const u8) bool {
     var parse_storage: [128 * 1024]u8 = undefined;
@@ -534,6 +655,25 @@ pub fn applySessionJson(model: *Model, body: []const u8) bool {
     model.message_count = @min(data.messages.len, max_messages);
     for (data.messages[0..model.message_count], 0..) |message, index| {
         model.messages[index].set(index + 1, if (std.mem.eql(u8, message.role, "user")) .user else .assistant, message.content);
+    }
+    return true;
+}
+
+pub fn applyCommandJson(model: *Model, body: []const u8) bool {
+    var parse_storage: [128 * 1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&parse_storage);
+    const envelope = std.json.parseFromSliceLeaky(
+        CommandEnvelope,
+        fba.allocator(),
+        body,
+        .{ .ignore_unknown_fields = true },
+    ) catch return false;
+    if (!envelope.ok) return false;
+    const data = envelope.data orelse return false;
+    model.command_title_len = copyText(&model.command_title_storage, data.title);
+    model.command_row_count = @min(data.rows.len, max_command_rows);
+    for (data.rows[0..model.command_row_count], 0..) |row, index| {
+        model.command_rows[index].set(index + 1, row);
     }
     return true;
 }
@@ -558,6 +698,8 @@ pub fn applySnapshotJson(model: *Model, body: []const u8) bool {
     model.workspace_len = copyText(&model.workspace_storage, snapshot.workspace orelse "");
     model.model_len = copyText(&model.model_storage, snapshot.model orelse "");
     model.provider_len = copyText(&model.provider_storage, snapshot.provider orelse "");
+    model.backend_len = copyText(&model.backend_storage, snapshot.backend orelse "");
+    model.mode_len = copyText(&model.mode_storage, snapshot.mode orelse "");
     model.error_len = copyText(&model.error_storage, snapshot.@"error" orelse "");
     model.total_tokens = snapshot.usage.totalTokens;
     model.total_cost = snapshot.usage.cost;

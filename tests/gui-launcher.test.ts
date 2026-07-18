@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { guiBinaryCandidates, resolveGuiBinary } from '../src/run/gui';
+import { delimiter } from 'node:path';
+import {
+  guiBinaryCandidates,
+  guiLaunchPath,
+  resolveGuiBinary,
+} from '../src/run/gui';
 
 describe('native GUI launcher', () => {
   test('prefers explicit binary then source build and packaged app', () => {
@@ -23,5 +28,12 @@ describe('native GUI launcher', () => {
 
   test('returns null when GUI has not been built', () => {
     expect(resolveGuiBinary('/repo', {}, () => false)).toBeNull();
+  });
+
+  test('launcher prepends repo bin so the native host can resolve lavalamp', () => {
+    const path = guiLaunchPath('/repo', { PATH: '/custom/bin' });
+    const entries = path.split(delimiter);
+    expect(entries[0]).toBe('/repo/bin');
+    expect(entries).toContain('/custom/bin');
   });
 });
