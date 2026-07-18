@@ -1,11 +1,24 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { listModels } from '../config/models';
+import { AnalyticsStore, formatAnalyticsRows } from '../analytics';
+import { BenchmarkCatalog } from '../benchmarks/catalog';
+import { listCustomBenchmarks } from '../benchmarks/custom';
+import { BenchmarkRunStore } from '../benchmarks/run-store';
+import { officialBenchmarkSources } from '../benchmarks/sources';
+import {
+  createBenchmarkBrowserModel,
+  renderBenchmarkDetails,
+} from '../tui/benchmarks';
+import { BUILD_MODEL, listModels } from '../config/models';
+import { resolveRuntimeRoute, routeSummary } from '../config/runtime-route';
+import { resolveConfig, updateConfig } from '../config/user-config';
 import type { AgentBackend } from '../runtime/backend';
 import { parseBackend } from '../runtime/backend';
+import { isAllowAll, loadAutorun, setAllowAll } from '../permissions/autorun';
 import { getDefaultRules, loadRules } from '../permissions/rules';
 import { copyTextToClipboard } from '../storage/clipboard';
+import { benchmarkCacheDir, benchmarkWorkspaceDir } from '../storage/paths';
 import { discoverSkills } from '../tui/discover';
 import { HELP_COMMANDS, HELP_KEYS } from '../tui/slash-data';
 import {
@@ -90,7 +103,7 @@ export async function runGuiHost(options: GuiHostMainOptions): Promise<void> {
   });
 }
 
-async function runGuiCommand(
+export async function runGuiCommand(
   runtime: GuiRuntime,
   workspace: string,
   serverPath: string,
@@ -189,15 +202,9 @@ async function runGuiCommand(
       };
     case '/benchmark':
     case '/benchmarks':
-      return {
-        title: cmd,
-        rows: ['Benchmark browser is TUI-only in this build.'],
-      };
+      return readBenchmarkSummary(workspace);
     case '/gateway':
-      return {
-        title: '/gateway',
-        rows: ['Gateway status and switching are TUI-only in this build.'],
-      };
+      return setOrReadGateway(runtime, workspace, arg);
     case '/usage': {
       const usage = runtime.store.snapshot().usage;
       return {
@@ -210,15 +217,9 @@ async function runGuiCommand(
       };
     }
     case '/analytics':
-      return {
-        title: '/analytics',
-        rows: ['Analytics browser is TUI-only in this build.'],
-      };
+      return readAnalyticsReport(workspace, arg);
     case '/rate':
-      return {
-        title: '/rate',
-        rows: ['Run rating is TUI-only in this build.'],
-      };
+      return rateCurrentRun(runtime, arg);
     case '/workspace':
       return { title: '/workspace', rows: [`workspace: ${workspace}`] };
     case '/skills': {
@@ -233,12 +234,9 @@ async function runGuiCommand(
     case '/tools':
       return readRegisteredTools(serverPath);
     case '/subagents':
-      return { title: '/subagents', rows: ['No GUI subagent registry events yet.'] };
+      return { title: '/subagents', rows: ['No subagents.'] };
     case '/sudo':
-      return {
-        title: '/sudo',
-        rows: ['Sudo mode is TUI-only in this build. Use permission buttons per tool.'],
-      };
+      return setOrReadSudo(workspace, arg);
     case '/permissions': {
       const rules = loadRules(workspace);
       return {
@@ -314,6 +312,167 @@ function readProjectMemory(workspace: string): GuiCommandResult {
   } catch {
     return { title: '/memory', rows: ['No AGENTS.md found.'] };
   }
+}
+
+function readAnalyticsReport(workspace: string, arg: string): GuiCommandResult {
+  const scope = arg === 'global' ? 'global' : 'project';
+  const range =
+    arg === 'session' ||
+    arg === '7d' ||
+    arg === '30d' ||
+    arg === '90d' ||
+    arg === 'all'
+      ? arg
+      : '30d';
+  try {
+    const store = new AnalyticsStore();
+    try {
+      const report = store.report({ range, scope, workspaceRoot: workspace });
+      return {
+        title: `/analytics ${arg || '30d'}`,
+        rows: formatAnalyticsRows(report).map((row) => row.trimEnd()),
+      };
+    } finally {
+      store.close();
+    }
+  } catch {
+    return { title: '/analytics', rows: ['Analytics unavailable.'] };
+  }
+}
+
+function rateCurrentRun(runtime: GuiRuntime, arg: string): GuiCommandResult {
+  if (arg !== 'helpful' && arg !== 'unhelpful') {
+    return {
+      title: '/rate',
+      rows: ['usage: /rate helpful|unhelpful'],
+    };
+  }
+  runtime.rate(arg);
+  return {
+    title: '/rate',
+    rows: [`current GUI run rated ${arg}`],
+  };
+}
+
+async function setOrReadGateway(
+  runtime: GuiRuntime,
+  workspace: string,
+  arg: string,
+): Promise<GuiCommandResult> {
+  if (arg.length > 0) {
+    if (runtime.store.snapshot().processing) {
+      return {
+        title: '/gateway',
+        rows: ['Cannot change Gateway while a prompt is running.'],
+      };
+    }
+    if (arg.toLowerCase() === 'off') {
+      updateConfig({
+        gatewayEnabled: false,
+        preferredProviderRoute: 'direct',
+      });
+      await runtime.restart();
+      return { title: '/gateway', rows: ['AI Gateway disabled.'] };
+    }
+    updateConfig({
+      gatewayEnabled: true,
+      gatewayId: arg,
+      preferredProviderRoute: 'gateway',
+    });
+    await runtime.restart();
+    return { title: '/gateway', rows: [`AI Gateway enabled: ${arg}`] };
+  }
+
+  const config = resolveConfig();
+  const route = resolveRuntimeRoute({
+    config,
+    env: process.env as Record<string, string | undefined>,
+    model: runtime.store.snapshot().model,
+    preferredModel: BUILD_MODEL,
+  });
+  return {
+    title: '/gateway',
+    rows: [
+      `gateway: ${config.gatewayEnabled ? 'on' : 'off'}`,
+      `id: ${config.gatewayId || '(none)'}`,
+      `route: ${routeSummary(route)}`,
+      'use /gateway <id> to enable · /gateway off to disable',
+      `workspace: ${workspace}`,
+    ],
+  };
+}
+
+function setOrReadSudo(workspace: string, arg: string): GuiCommandResult {
+  loadAutorun(workspace);
+  const normalized = arg.toLowerCase();
+  if (normalized === 'enable' || normalized === 'on') {
+    setAllowAll(workspace, true);
+    return {
+      title: '/sudo',
+      rows: ['sudo enabled: all tools allowed'],
+    };
+  }
+  if (normalized === 'disable' || normalized === 'off') {
+    setAllowAll(workspace, false);
+    return {
+      title: '/sudo',
+      rows: ['sudo disabled'],
+    };
+  }
+  return {
+    title: '/sudo',
+    rows: [
+      `sudo: ${isAllowAll() ? 'enabled' : 'disabled'}`,
+      'usage: /sudo enable|off',
+      'sudo allows every tool without permission prompts.',
+    ],
+  };
+}
+
+function readBenchmarkSummary(workspace: string): GuiCommandResult {
+  const catalog = new BenchmarkCatalog(
+    benchmarkCacheDir(),
+    officialBenchmarkSources(),
+  );
+  const snapshots = catalog.ids().flatMap((id) => {
+    const snapshot = catalog.readCached(id);
+    return snapshot === null ? [] : [snapshot];
+  });
+  const runs = new BenchmarkRunStore(
+    join(benchmarkWorkspaceDir(workspace), 'runs'),
+  ).list();
+  const model = createBenchmarkBrowserModel(
+    snapshots,
+    listCustomBenchmarks(workspace),
+    runs,
+  );
+  const entries = model.entries;
+  if (entries.length === 0) {
+    return {
+      title: '/benchmarks',
+      rows: [
+        'No benchmark data found.',
+        'Run `lavalamp benchmark refresh` or create a custom suite.',
+      ],
+    };
+  }
+  const rows = [
+    `entries: ${entries.length} · saved runs: ${runs.length}`,
+    '',
+    ...entries.slice(0, 12).map((entry, index) => {
+      const kind =
+        entry.kind === 'public'
+          ? entry.snapshot?.runnable
+            ? 'public'
+            : 'reference'
+          : entry.kind;
+      return `${index + 1}. ${entry.label} · ${kind}`;
+    }),
+    '',
+    'selected:',
+    ...renderBenchmarkDetails(model).split('\n'),
+  ];
+  return { title: '/benchmarks', rows };
 }
 
 function readMcpConfig(): GuiCommandResult {

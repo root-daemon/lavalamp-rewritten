@@ -8,6 +8,7 @@ import type {
 import type { AgentBackend } from '../runtime/backend';
 import { createRuntimeProcess } from '../runtime/process';
 import type { RuntimeCallbacks, RuntimeMode, RuntimeModel } from '../runtime/types';
+import { AnalyticsRecorder, type RunRating } from '../analytics';
 import type { GuiPermissionDecision } from './contracts';
 import { GuiEventStore } from './event-store';
 
@@ -57,6 +58,8 @@ export class GuiRuntime {
   private mode: RuntimeMode;
   private model?: string;
   private sessionId?: string;
+  private analytics?: AnalyticsRecorder;
+  private activeTurnId?: string;
 
   constructor(options: GuiRuntimeOptions & {
     backend?: AgentBackend;
@@ -74,6 +77,14 @@ export class GuiRuntime {
     this.serverPath = options.serverPath;
     this.sessionId = options.sessionId;
     this.workspace = options.workspace;
+    if (options.workspace !== undefined) {
+      this.analytics = AnalyticsRecorder.create({
+        agent: modeToAgentName(this.mode),
+        conversationSessionId: options.sessionId,
+        mode: this.mode,
+        workspaceRoot: options.workspace,
+      });
+    }
   }
 
   static create(options: {
@@ -120,6 +131,7 @@ export class GuiRuntime {
 
   private wireProcess(): void {
     this.process.onPermissionRequest = (request) => {
+      this.analytics?.event('permission', 'requested', this.activeTurnId);
       this.store.append({
         args: request.args,
         requestId: request.requestId,
@@ -128,6 +140,7 @@ export class GuiRuntime {
       });
     };
     this.process.onQuestionRequest = (request) => {
+      this.analytics?.event('question', 'requested', this.activeTurnId);
       this.store.append({
         questions: request.questions,
         requestId: request.requestId,
@@ -152,11 +165,14 @@ export class GuiRuntime {
     this.store.append({ content: trimmed, type: 'user.message' });
     return this.process.prompt(trimmed, {
       onError: (error) => {
+        this.analytics?.finishTurn(this.activeTurnId, 'failed');
+        this.activeTurnId = undefined;
         this.store.append({ message: error.message, type: 'turn.failed' });
       },
       onEvent: (event) => {
         switch (event.type) {
           case 'text_delta':
+            this.analytics?.firstResponse(this.activeTurnId);
             this.store.append({
               delta: event.text ?? event.delta ?? '',
               type: 'text.delta',
@@ -169,6 +185,12 @@ export class GuiRuntime {
             });
             break;
           case 'tool_start':
+            this.analytics?.toolStarted(
+              this.activeTurnId,
+              event.toolCallId,
+              event.toolName ?? 'unknown',
+              event.args ?? {},
+            );
             this.store.append({
               args: event.args ?? {},
               toolCallId: event.toolCallId ?? `tool-${Date.now()}`,
@@ -177,6 +199,13 @@ export class GuiRuntime {
             });
             break;
           case 'tool':
+            this.analytics?.toolFinished(
+              this.activeTurnId,
+              event.toolCallId,
+              event.toolName ?? 'unknown',
+              event.durationMs,
+              Boolean(event.isError),
+            );
             this.store.append({
               durationMs: event.durationMs,
               isError: Boolean(event.isError),
@@ -191,6 +220,11 @@ export class GuiRuntime {
         }
       },
       onResult: (result) => {
+        this.analytics?.finishTurn(this.activeTurnId, 'completed', {
+          model: result.model,
+          usage: result.usage,
+        });
+        this.activeTurnId = undefined;
         this.store.append({
           backend: result.backend ?? this.backend,
           model: result.model.id,
@@ -207,6 +241,7 @@ export class GuiRuntime {
         });
       },
       onStarted: () => {
+        this.activeTurnId = this.analytics?.startTurn();
         this.store.append({ type: 'turn.started' });
       },
     }, sessionId);
@@ -224,6 +259,15 @@ export class GuiRuntime {
       await this.process.restart?.();
     }
     this.mode = mode;
+    this.analytics?.finish('completed');
+    this.analytics = this.workspace === undefined
+      ? undefined
+      : AnalyticsRecorder.create({
+          agent: modeToAgentName(mode),
+          conversationSessionId: this.sessionId,
+          mode,
+          workspaceRoot: this.workspace,
+        });
     this.store.append({ mode, type: 'mode.changed' });
   }
 
@@ -253,6 +297,15 @@ export class GuiRuntime {
     await this.process.shutdown();
     this.backend = backend;
     this.sessionId = `session_${Date.now()}`;
+    this.analytics?.finish('completed');
+    this.analytics = this.workspace === undefined
+      ? undefined
+      : AnalyticsRecorder.create({
+          agent: modeToAgentName(this.mode),
+          conversationSessionId: this.sessionId,
+          mode: this.mode,
+          workspaceRoot: this.workspace,
+        });
     this.process = createRuntimeProcess({
       agentName: modeToAgentName(this.mode),
       allowModelFallback: backend === 'codex',
@@ -276,9 +329,11 @@ export class GuiRuntime {
   async compact(): Promise<void> {
     if (this.process.compact !== undefined) {
       await this.process.compact();
+      this.analytics?.event('compaction', 'completed', this.activeTurnId);
       this.store.append({ message: 'Context compacted', type: 'notice' });
       return;
     }
+    this.analytics?.event('compaction', 'completed', this.activeTurnId);
     this.store.compactMessages();
   }
 
@@ -304,6 +359,11 @@ export class GuiRuntime {
       decision === 'deny' ? 'deny' : 'allow',
       decision === 'always_allow',
     );
+    this.analytics?.event(
+      'permission',
+      decision === 'deny' ? 'denied' : 'allowed',
+      this.activeTurnId,
+    );
     this.store.append({ decision, requestId, type: 'permission.resolved' });
   }
 
@@ -316,6 +376,7 @@ export class GuiRuntime {
       throw new Error('Question request is no longer pending');
     }
     this.process.sendQuestionResponse(requestId, answers);
+    this.analytics?.event('question', 'answered', this.activeTurnId);
     this.store.append({ requestId, type: 'question.resolved' });
   }
 
@@ -324,10 +385,30 @@ export class GuiRuntime {
       return;
     }
     this.process.cancel();
+    this.analytics?.finishTurn(this.activeTurnId, 'interrupted');
+    this.activeTurnId = undefined;
     this.store.append({ type: 'turn.cancelled' });
   }
 
+  async restart(): Promise<void> {
+    if (this.store.snapshot().processing) {
+      throw new Error('Cannot restart while a turn is running');
+    }
+    await this.process.restart?.();
+  }
+
+  rate(rating: RunRating): void {
+    this.analytics?.rate(rating);
+  }
+
   async shutdown(): Promise<void> {
+    const processing = this.store.snapshot().processing;
+    if (processing) {
+      this.analytics?.finishTurn(this.activeTurnId, 'interrupted');
+      this.activeTurnId = undefined;
+    }
+    this.analytics?.finish(processing ? 'interrupted' : 'completed');
+    this.analytics?.close();
     await this.process.shutdown();
   }
 }
