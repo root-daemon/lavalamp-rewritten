@@ -40,6 +40,7 @@ pub const host_process_key: u64 = 100;
 pub const poll_timer_key: u64 = 101;
 const poll_fetch_key: u64 = 102;
 const action_fetch_key: u64 = 103;
+const session_fetch_key: u64 = 104;
 const max_messages = 40;
 const max_tools = 24;
 const max_sessions = 16;
@@ -95,6 +96,7 @@ pub const Session = struct {
     id_len: usize = 0,
     prompt_storage: [320]u8 = undefined,
     prompt_len: usize = 0,
+    selected: bool = false,
 
     pub fn id(self: *const Session) []const u8 {
         return self.id_storage[0..self.id_len];
@@ -112,7 +114,7 @@ pub const Model = struct {
         "workspace_storage", "workspace_len", "model_storage", "model_len",
         "provider_storage", "provider_len", "permission_id_storage", "permission_id_len",
         "permission_tool_storage", "permission_tool_len", "messages", "message_count",
-        "tools", "tool_count", "sessions", "session_count", "assistantText", "authToken",
+        "tools", "tool_count", "sessions", "session_count", "selected_session_key", "total_tokens", "total_cost", "assistantText", "authToken",
         "permissionId", "hasMessages",
     };
 
@@ -148,6 +150,7 @@ pub const Model = struct {
     tool_count: usize = 0,
     sessions: [max_sessions]Session = [_]Session{.{}} ** max_sessions,
     session_count: usize = 0,
+    selected_session_key: u64 = 0,
     total_tokens: u64 = 0,
     total_cost: f64 = 0,
 
@@ -196,8 +199,26 @@ pub const Model = struct {
     pub fn sessionItems(self: *const Model) []const Session {
         return self.sessions[0..self.session_count];
     }
+    fn selectedSessionId(self: *const Model) []const u8 {
+        for (self.sessions[0..self.session_count]) |*session| {
+            if (session.key == self.selected_session_key) return session.id();
+        }
+        return "";
+    }
     pub fn hasMessages(self: *const Model) bool {
         return self.message_count > 0;
+    }
+    pub fn hasAssistantText(self: *const Model) bool {
+        return self.assistant_len > 0;
+    }
+    pub fn hasSessions(self: *const Model) bool {
+        return self.session_count > 0;
+    }
+    pub fn hasTools(self: *const Model) bool {
+        return self.tool_count > 0;
+    }
+    pub fn usageLabel(self: *const Model, arena: std.mem.Allocator) []const u8 {
+        return std.fmt.allocPrint(arena, "{d} tokens · ${d:.4}", .{ self.total_tokens, self.total_cost }) catch "Usage unavailable";
     }
     pub fn emptyState(self: *const Model) bool {
         return self.message_count == 0;
@@ -227,7 +248,9 @@ pub const Model = struct {
 pub const Msg = union(enum) {
     draft_edit: canvas.TextInputEvent,
     send,
+    cancel,
     new_chat,
+    select_session: u64,
     allow_permission,
     always_allow_permission,
     deny_permission,
@@ -236,8 +259,9 @@ pub const Msg = union(enum) {
     poll_tick: native_sdk.EffectTimer,
     snapshot_response: native_sdk.EffectResponse,
     action_response: native_sdk.EffectResponse,
+    session_response: native_sdk.EffectResponse,
 
-    pub const view_unbound = .{ "host_line", "host_exit", "poll_tick", "snapshot_response", "action_response" };
+    pub const view_unbound = .{ "host_line", "host_exit", "poll_tick", "snapshot_response", "action_response", "session_response" };
 };
 
 pub const Effects = native_sdk.Effects(Msg);
@@ -264,6 +288,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
     switch (msg) {
         .draft_edit => |edit| model.draft.apply(edit),
         .send => sendPrompt(model, fx),
+        .cancel => cancelTurn(model, fx),
         .new_chat => {
             model.message_count = 0;
             model.tool_count = 0;
@@ -271,7 +296,10 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.thinking_len = 0;
             model.terminal_len = 0;
             model.error_len = 0;
+            model.selected_session_key = 0;
+            for (model.sessions[0..model.session_count]) |*session| session.selected = false;
         },
+        .select_session => |key| selectSession(model, key, fx),
         .allow_permission => resolvePermission(model, fx, "allow"),
         .always_allow_permission => resolvePermission(model, fx, "always_allow"),
         .deny_permission => resolvePermission(model, fx, "deny"),
@@ -295,6 +323,13 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 model.processing = false;
                 setError(model, "Lavalamp action failed");
             }
+        },
+        .session_response => |response| {
+            if (response.outcome != .ok or response.status < 200 or response.status >= 300) {
+                setError(model, "Could not load selected session");
+                return;
+            }
+            if (!applySessionJson(model, response.body)) setError(model, "Invalid session response");
         },
     }
 }
@@ -344,15 +379,20 @@ fn sendPrompt(model: *Model, fx: *Effects) void {
     if (model.sendDisabled()) return;
     var url_buffer: [160]u8 = undefined;
     var auth_buffer: [192]u8 = undefined;
-    const headers = [_]std.http.Header{
-        .{ .name = "authorization", .value = authHeader(model, &auth_buffer) },
-        .{ .name = "content-type", .value = "text/plain; charset=utf-8" },
-    };
+    var headers: [3]std.http.Header = undefined;
+    headers[0] = .{ .name = "authorization", .value = authHeader(model, &auth_buffer) };
+    headers[1] = .{ .name = "content-type", .value = "text/plain; charset=utf-8" };
+    var header_count: usize = 2;
+    const session_id = model.selectedSessionId();
+    if (session_id.len > 0) {
+        headers[header_count] = .{ .name = "x-lavalamp-session", .value = session_id };
+        header_count += 1;
+    }
     fx.fetch(.{
         .key = action_fetch_key,
         .method = .POST,
         .url = endpoint(model, &url_buffer, "/v1/native/prompts"),
-        .headers = &headers,
+        .headers = headers[0..header_count],
         .body = model.draft.text(),
         .timeout_ms = 10_000,
         .on_response = Effects.responseMsg(.action_response),
@@ -360,6 +400,54 @@ fn sendPrompt(model: *Model, fx: *Effects) void {
     model.processing = true;
     model.draft.clear();
     model.error_len = 0;
+}
+
+fn cancelTurn(model: *Model, fx: *Effects) void {
+    if (!model.processing) return;
+    var url_buffer: [160]u8 = undefined;
+    var auth_buffer: [192]u8 = undefined;
+    const headers = [_]std.http.Header{.{ .name = "authorization", .value = authHeader(model, &auth_buffer) }};
+    fx.fetch(.{
+        .key = action_fetch_key,
+        .method = .POST,
+        .url = endpoint(model, &url_buffer, "/v1/cancel"),
+        .headers = &headers,
+        .on_response = Effects.responseMsg(.action_response),
+    });
+    model.processing = false;
+}
+
+fn selectSession(model: *Model, key: u64, fx: *Effects) void {
+    model.selected_session_key = key;
+    var session_id: []const u8 = "";
+    for (model.sessions[0..model.session_count]) |*session| {
+        session.selected = session.key == key;
+        if (session.selected) session_id = session.id();
+    }
+    if (session_id.len == 0) return;
+    model.message_count = 0;
+    model.tool_count = 0;
+    model.assistant_len = 0;
+    model.thinking_len = 0;
+    model.terminal_len = 0;
+    model.error_len = 0;
+
+    var url_buffer: [160]u8 = undefined;
+    var auth_buffer: [192]u8 = undefined;
+    var body_buffer: [192]u8 = undefined;
+    const body = std.fmt.bufPrint(&body_buffer, "{{\"sessionId\":\"{s}\"}}", .{session_id}) catch return;
+    const headers = [_]std.http.Header{
+        .{ .name = "authorization", .value = authHeader(model, &auth_buffer) },
+        .{ .name = "content-type", .value = "application/json" },
+    };
+    fx.fetch(.{
+        .key = session_fetch_key,
+        .method = .POST,
+        .url = endpoint(model, &url_buffer, "/v1/session"),
+        .headers = &headers,
+        .body = body,
+        .on_response = Effects.responseMsg(.session_response),
+    });
 }
 
 fn resolvePermission(model: *Model, fx: *Effects, decision: []const u8) void {
@@ -426,6 +514,29 @@ const NativeData = struct {
     models: []const ModelPayload = &.{},
 };
 const NativeEnvelope = struct { ok: bool = false, data: ?NativeData = null };
+const SessionData = struct {
+    sessionId: []const u8 = "",
+    messages: []const MessagePayload = &.{},
+};
+const SessionEnvelope = struct { ok: bool = false, data: ?SessionData = null };
+
+pub fn applySessionJson(model: *Model, body: []const u8) bool {
+    var parse_storage: [128 * 1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&parse_storage);
+    const envelope = std.json.parseFromSliceLeaky(
+        SessionEnvelope,
+        fba.allocator(),
+        body,
+        .{ .ignore_unknown_fields = true },
+    ) catch return false;
+    if (!envelope.ok) return false;
+    const data = envelope.data orelse return false;
+    model.message_count = @min(data.messages.len, max_messages);
+    for (data.messages[0..model.message_count], 0..) |message, index| {
+        model.messages[index].set(index + 1, if (std.mem.eql(u8, message.role, "user")) .user else .assistant, message.content);
+    }
+    return true;
+}
 
 pub fn applySnapshotJson(model: *Model, body: []const u8) bool {
     var parse_storage: [256 * 1024]u8 = undefined;
@@ -473,6 +584,7 @@ pub fn applySnapshotJson(model: *Model, body: []const u8) bool {
         target.key = std.hash.Wyhash.hash(0, session.sessionId);
         target.id_len = copyText(&target.id_storage, session.sessionId);
         target.prompt_len = copyText(&target.prompt_storage, session.prompt);
+        target.selected = target.key == model.selected_session_key;
     }
 
     if (snapshot.pendingPermission) |permission| {

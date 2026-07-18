@@ -96,4 +96,23 @@ describe('GUI event store', () => {
       ],
     });
   });
+
+  test('replaces conversation when native GUI opens a saved session', () => {
+    const store = new GuiEventStore();
+    store.append({ content: 'Current prompt', type: 'user.message' });
+    store.append({ type: 'turn.started' });
+    store.replaceMessages([
+      { content: 'Saved prompt', role: 'user' },
+      { content: 'Saved answer', role: 'assistant' },
+    ]);
+
+    expect(store.snapshot()).toMatchObject({
+      messages: [
+        { content: 'Saved prompt', role: 'user' },
+        { content: 'Saved answer', role: 'assistant' },
+      ],
+      processing: false,
+      tools: [],
+    });
+  });
 });

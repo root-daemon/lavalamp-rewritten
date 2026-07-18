@@ -1,164 +1,226 @@
-<row background="background">
-  <panel width="248" padding="0">
-    <column grow="1">
-      <row height="62" padding="16" gap="10" cross="center" background="surface" window-drag="true">
-        <icon name="circle-dot" size="sm" />
-        <text grow="1">Lavalamp</text>
-      </row>
-      <separator />
-      <column padding="12" gap="12" grow="1">
-        <button variant="primary" on-press="new_chat">+ New chat</button>
-        <text foreground="text_muted">RECENT</text>
-        <scroll grow="1">
-          <column gap="4">
-            <for each="sessionItems" key="key" as="session">
-              <button variant="ghost" size="sm">{session.prompt}</button>
-            </for>
+<column background="background">
+  <row grow="1">
+    <panel width="236" padding="0">
+      <column grow="1">
+        <row height="56" padding="14" gap="10" cross="center" window-drag="true">
+          <icon name="circle-dot" size="sm" />
+          <column gap="1" grow="1">
+            <text>Lavalamp</text>
+            <text foreground="text_muted">Native Workspace</text>
           </column>
-        </scroll>
-      </column>
-      <separator />
-      <column padding="14" gap="4">
-        <text wrap="true">{workspaceLabel}</text>
-        <text foreground="text_muted">{modelLabel}</text>
-      </column>
-    </column>
-  </panel>
-  <separator />
+        </row>
+        <separator />
 
-  <column grow="1" background="background">
-    <row height="62" padding="16" gap="10" cross="center" window-drag="true">
-      <column gap="2" grow="1">
-        <text>Agent session</text>
-        <text foreground="text_muted">{workspaceLabel}</text>
+        <column padding="12" gap="12" grow="1">
+          <button icon="plus" variant="primary" on-press="new_chat" label="Start New Chat">New Chat</button>
+
+          <row height="28" cross="center">
+            <text grow="1" foreground="text_muted">Recent Sessions</text>
+            <badge variant="secondary">{session_count}</badge>
+          </row>
+
+          <scroll grow="1" label="Recent sessions">
+            <column gap="3">
+              <if test="{hasSessions}">
+                <for each="sessionItems" key="key" as="session">
+                  <list-item icon="file-text" selected="{session.selected}" on-press="select_session:{session.key}" label="Open session">
+                    <text grow="1" wrap="true">{session.prompt}</text>
+                  </list-item>
+                </for>
+              </if>
+              <else>
+                <panel padding="10">
+                  <text wrap="true" foreground="text_muted">Sessions appear after first completed turn.</text>
+                </panel>
+              </else>
+            </column>
+          </scroll>
+        </column>
+
+        <separator />
+        <column padding="14" gap="5">
+          <row gap="7" cross="center">
+            <icon name="folder" size="sm" />
+            <text grow="1" wrap="true">{workspaceLabel}</text>
+          </row>
+          <text foreground="text_muted">{modelLabel}</text>
+        </column>
       </column>
-      <badge>{connectionLabel}</badge>
-      <button size="sm" variant="ghost" on-press="new_chat">Clear</button>
-    </row>
+    </panel>
+
     <separator />
 
-    <scroll grow="1">
-      <column padding="28" gap="20">
-        <if test="{hasError}">
-          <alert variant="destructive">{errorText}</alert>
-        </if>
-        <if test="{emptyState}">
-          <column gap="12" main="center" cross="center" grow="1">
-            <icon name="wrench" size="lg" />
-            <text>Lavalamp ready to build.</text>
-            <text foreground="text_muted">Ask about code, ship feature, or inspect workspace.</text>
-          </column>
-        </if>
-        <for each="messageItems" key="id" as="message">
-          <if test="{message.isUser}">
-            <row main="end">
-              <card size="sm" width="560" padding="14">
-                <text wrap="true">{message.content}</text>
-              </card>
+    <column grow="1" background="background">
+      <row height="56" padding="16" gap="10" cross="center" window-drag="true">
+        <column gap="1" grow="1">
+          <text>Agent Session</text>
+          <text foreground="text_muted">{providerLabel} · {modelLabel}</text>
+        </column>
+        <badge variant="secondary">{connectionLabel}</badge>
+        <stack>
+          <button icon="plus" size="icon" variant="ghost" on-press="new_chat" label="Start New Chat"></button>
+          <tooltip anchor="below">Start New Chat</tooltip>
+        </stack>
+      </row>
+      <separator />
+
+      <scroll grow="1" label="Conversation">
+        <column padding="24" gap="20">
+          <if test="{hasError}">
+            <alert variant="destructive">{errorText}</alert>
+          </if>
+
+          <if test="{emptyState}">
+            <column gap="14" main="center" cross="center" grow="1">
+              <avatar>LL</avatar>
+              <column gap="5" cross="center">
+                <text>Lavalamp Ready</text>
+                <text foreground="text_muted">Inspect code, run tools, or ship a change from this workspace.</text>
+              </column>
+              <row gap="6">
+                <badge variant="secondary">Native</badge>
+                <badge variant="secondary">Full Runtime</badge>
+                <badge variant="secondary">Interactive Permissions</badge>
+              </row>
+            </column>
+          </if>
+
+          <for each="messageItems" key="id" as="message">
+            <if test="{message.isUser}">
+              <row main="end">
+                <bubble variant="primary" width="560" padding="12">
+                  <text wrap="true">{message.content}</text>
+                </bubble>
+              </row>
+            </if>
+            <else>
+              <row gap="10" cross="start">
+                <avatar size="sm">LL</avatar>
+                <column gap="7" grow="1">
+                  <text foreground="text_muted">Lavalamp</text>
+                  <markdown source="{message.content}" />
+                </column>
+              </row>
+            </else>
+          </for>
+
+          <if test="{hasAssistantText}">
+            <row gap="10" cross="start">
+              <avatar size="sm">LL</avatar>
+              <column gap="7" grow="1">
+                <row gap="7" cross="center">
+                  <text foreground="text_muted">Lavalamp</text>
+                  <spinner size="sm" />
+                </row>
+                <markdown source="{assistantText}" />
+              </column>
             </row>
           </if>
           <else>
-            <column gap="8">
+            <if test="{processing}">
               <row gap="8" cross="center">
-                <icon name="circle-dot" size="sm" />
-                <text>Lavalamp</text>
+                <spinner size="sm" />
+                <text foreground="text_muted">Working…</text>
               </row>
-              <markdown source="{message.content}"></markdown>
-            </column>
+            </if>
           </else>
-        </for>
-        <if test="{processing}">
-          <row gap="8" cross="center">
-            <spinner size="sm" />
-            <text foreground="text_muted">Working…</text>
-          </row>
-        </if>
-        <if test="{hasThinking}">
-          <accordion>
-            <text>Reasoning</text>
-            <text wrap="true" foreground="text_muted">{thinkingText}</text>
-          </accordion>
-        </if>
-        <if test="{permission_pending}">
-          <card padding="16">
-            <column gap="12">
-              <row gap="8" cross="center">
-                <icon name="alert" size="sm" />
-                <text>Permission required · {permissionTool}</text>
-              </row>
-              <row gap="8">
-                <button variant="primary" on-press="allow_permission">Allow</button>
-                <button variant="secondary" on-press="always_allow_permission">Always allow</button>
-                <button variant="ghost" on-press="deny_permission">Deny</button>
-              </row>
-            </column>
-          </card>
-        </if>
-      </column>
-    </scroll>
 
-    <column padding="16" gap="8">
-      <card padding="10">
-        <column gap="8">
-          <textarea height="92" grow="1" text="{draftText}" placeholder="Ask Lavalamp to build, inspect, or fix…" on-input="draft_edit" on-submit="send" label="Message" />
-          <row gap="8" cross="center">
-            <text grow="1" foreground="text_muted">Primary + Enter sends · permissions stay interactive</text>
-            <button variant="primary" disabled="{sendDisabled}" on-press="send">Send</button>
-          </row>
-        </column>
-      </card>
-    </column>
-  </column>
-
-  <separator />
-  <panel width="300" padding="0">
-    <column grow="1">
-      <row height="62" padding="16" cross="center" window-drag="true">
-        <text>Activity</text>
-      </row>
-      <separator />
-      <scroll grow="1">
-        <column padding="16" gap="16">
-          <column gap="6">
-            <text foreground="text_muted">ROUTE</text>
-            <text>{modelLabel}</text>
-            <text foreground="text_muted">{providerLabel}</text>
-          </column>
-          <separator />
-          <column gap="8">
-            <text foreground="text_muted">TOOLS</text>
-            <for each="toolItems" key="id" as="tool">
-              <panel padding="10">
-                <column gap="4">
-                  <row gap="6">
-                    <text grow="1">{tool.name}</text>
-                    <badge>{tool.status}</badge>
-                  </row>
-                  <text wrap="true" foreground="text_muted">{tool.summary}</text>
-                </column>
-              </panel>
-            </for>
-          </column>
-          <if test="{hasTerminal}">
-            <separator />
-            <column gap="6">
-              <text foreground="text_muted">TERMINAL</text>
-              <text wrap="true">{terminalText}</text>
-            </column>
+          <if test="{hasThinking}">
+            <accordion text="Reasoning">
+              <text wrap="true" foreground="text_muted">{thinkingText}</text>
+            </accordion>
           </if>
-          <separator />
-          <row gap="8">
-            <column grow="1" gap="2">
-              <text foreground="text_muted">TOKENS</text>
-              <text>{total_tokens}</text>
-            </column>
-            <column grow="1" gap="2">
-              <text foreground="text_muted">COST</text>
-              <text>${total_cost}</text>
-            </column>
-          </row>
+
+          <if test="{permission_pending}">
+            <panel padding="14">
+              <column gap="12">
+                <row gap="8" cross="center">
+                  <icon name="alert" size="sm" />
+                  <column gap="2" grow="1">
+                    <text>Permission Required</text>
+                    <text foreground="text_muted">{permissionTool} wants to modify workspace.</text>
+                  </column>
+                </row>
+                <button-group gap="4">
+                  <button variant="primary" on-press="allow_permission">Allow Once</button>
+                  <button variant="secondary" on-press="always_allow_permission">Always Allow</button>
+                  <button variant="ghost" on-press="deny_permission">Deny</button>
+                </button-group>
+              </column>
+            </panel>
+          </if>
         </column>
       </scroll>
+
+      <column padding="16" gap="8">
+        <input-group label="Message Composer" height="124">
+          <textarea text="{draftText}" placeholder="Ask Lavalamp to inspect, build, or fix…" on-input="draft_edit" on-submit="send" label="Message" />
+          <input-group-actions gap="6">
+            <badge variant="secondary">{modelLabel}</badge>
+            <spacer grow="1" />
+            <if test="{processing}">
+              <button icon="x" variant="secondary" size="sm" on-press="cancel" label="Stop Current Turn">Stop</button>
+            </if>
+            <else>
+              <button icon="send" variant="primary" size="sm" disabled="{sendDisabled}" on-press="send" label="Send Message">Send</button>
+            </else>
+          </input-group-actions>
+        </input-group>
+        <text foreground="text_muted">Enter sends · Tool calls stay permission-gated</text>
+      </column>
     </column>
-  </panel>
-</row>
+
+    <separator />
+
+    <panel width="296" padding="0">
+      <column grow="1">
+        <row height="56" padding="16" cross="center" window-drag="true">
+          <text grow="1">Run Activity</text>
+          <badge variant="secondary">{tool_count}</badge>
+        </row>
+        <separator />
+
+        <scroll grow="1" label="Run activity">
+          <column padding="16" gap="18">
+            <column gap="7">
+              <text foreground="text_muted">Runtime</text>
+              <row gap="8" cross="center">
+                <icon name="circle-dot" size="sm" />
+                <column gap="2" grow="1">
+                  <text>{modelLabel}</text>
+                  <text foreground="text_muted">{providerLabel}</text>
+                </column>
+              </row>
+            </column>
+
+            <separator />
+
+            <column gap="8">
+              <text foreground="text_muted">Tool Activity</text>
+              <if test="{hasTools}">
+                <timeline gap="7" label="Tool activity timeline">
+                  <for each="toolItems" key="id" as="tool">
+                    <timeline-item title="{tool.name}" description="{tool.summary}" meta="{tool.status}" />
+                  </for>
+                </timeline>
+              </if>
+              <else>
+                <text wrap="true" foreground="text_muted">Tool calls appear here while agent works.</text>
+              </else>
+            </column>
+
+            <if test="{hasTerminal}">
+              <separator />
+              <accordion text="Terminal Output">
+                <text wrap="true">{terminalText}</text>
+              </accordion>
+            </if>
+          </column>
+        </scroll>
+      </column>
+    </panel>
+  </row>
+
+  <separator />
+  <status-bar>{connectionLabel} · {usageLabel}</status-bar>
+</column>

@@ -1,4 +1,5 @@
 import type { GuiPermissionDecision } from './contracts';
+import type { GuiMessageSnapshot } from './contracts';
 import type { GuiEventStore } from './event-store';
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -23,6 +24,7 @@ export interface GuiHostServerOptions {
   port?: number;
   listSessions?: () => unknown[];
   listModels?: () => unknown[];
+  loadSession?: (sessionId: string) => GuiMessageSnapshot[] | null;
 }
 
 function json(data: unknown, status = 200): Response {
@@ -145,7 +147,15 @@ export function createGuiHostServer(
             typeof body.value.sessionId === 'string'
               ? body.value.sessionId
               : undefined;
+          const messages = sessionId === undefined
+            ? []
+            : options.loadSession?.(sessionId);
+          if (sessionId !== undefined && messages == null) {
+            return failure('session_not_found', 'Session was not found', 404);
+          }
+          options.runtime.store.replaceMessages(messages ?? []);
           return success({
+            messages: messages ?? [],
             sessionId,
             snapshot: options.runtime.store.snapshot(),
           });

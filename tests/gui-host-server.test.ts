@@ -46,6 +46,10 @@ function fixture() {
     hostname: '127.0.0.1',
     listModels: () => [{ displayName: 'Model A', id: 'model-a' }],
     listSessions: () => [{ prompt: 'Fix tests', sessionId: 'session-a' }],
+    loadSession: (sessionId) =>
+      sessionId === 'session-a'
+        ? [{ content: 'Fix tests', role: 'user' as const }]
+        : null,
     port: nextPort++,
     runtime,
     token: 'secret-token',
@@ -145,6 +149,17 @@ describe('GUI host server', () => {
     });
     expect(await (await request('/v1/models')).json()).toMatchObject({
       data: [{ id: 'model-a' }],
+    });
+
+    const resumed = await request('/v1/session', {
+      body: JSON.stringify({ sessionId: 'session-a' }),
+      method: 'POST',
+    });
+    expect(await resumed.json()).toMatchObject({
+      data: {
+        messages: [{ content: 'Fix tests', role: 'user' }],
+        sessionId: 'session-a',
+      },
     });
   });
 

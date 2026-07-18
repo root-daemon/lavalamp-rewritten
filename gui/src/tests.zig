@@ -27,6 +27,18 @@ test "snapshot JSON populates conversation, tools, sessions, and usage" {
     try testing.expectEqual(@as(u64, 17), model.total_tokens);
 }
 
+test "session response replaces conversation history" {
+    var model = main.initialModel();
+    const body =
+        \\{"ok":true,"data":{"sessionId":"session-a","messages":[{"role":"user","content":"Original prompt"},{"role":"assistant","content":"Original answer"}]}}
+    ;
+
+    try testing.expect(main.applySessionJson(&model, body));
+    try testing.expectEqual(@as(usize, 2), model.message_count);
+    try testing.expectEqualStrings("Original prompt", model.messages[0].content());
+    try testing.expectEqualStrings("Original answer", model.messages[1].content());
+}
+
 test "host ready line arms authenticated polling" {
     var model = main.initialModel();
     var fx = main.Effects.init(testing.allocator);
@@ -70,6 +82,9 @@ test "composer edit and submit dispatch through native markup" {
     const arena = arena_state.allocator();
     var model = main.initialModel();
     model.connected = true;
+    try testing.expect(main.applySnapshotJson(&model,
+        \\{"ok":true,"data":{"snapshot":{"messages":[{"role":"user","content":"Ship it"}]}}}
+    ));
 
     var view = try main.AppMarkup.init(arena, main.app_markup);
     var ui = main.AppUi.init(arena);
@@ -78,6 +93,9 @@ test "composer edit and submit dispatch through native markup" {
         return err;
     };
     const tree = try ui.finalize(root);
+    try testing.expect(findByKind(tree.root, .input_group) != null);
+    try testing.expect(findByKind(tree.root, .bubble) != null);
+    try testing.expect(findByKind(tree.root, .status_bar) != null);
     const composer = findByKind(tree.root, .textarea).?;
     const edit = tree.msgForTextEdit(composer.id, .{ .insert_text = "Ship it" }).?;
     try testing.expect(edit == .draft_edit);

@@ -46,6 +46,19 @@ export class GuiEventStore {
     return structuredClone(this.current);
   }
 
+  replaceMessages(messages: GuiSnapshot['messages']): void {
+    this.current = {
+      ...this.current,
+      assistantText: '',
+      error: undefined,
+      messages: messages.slice(-80),
+      processing: false,
+      terminalOutput: '',
+      thinkingText: '',
+      tools: [],
+    };
+  }
+
   resetTurn(): void {
     this.current = {
       ...this.current,

@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { listModels } from '../config/models';
-import { listSessions } from '../sessions/store';
+import {
+  listSessions as listChatSessions,
+  loadSession,
+} from '../tui/sessions';
 import { GuiRuntime } from './runtime';
 import { createGuiHostServer } from './server';
 
@@ -25,7 +28,20 @@ export async function runGuiHost(options: GuiHostMainOptions): Promise<void> {
   await runtime.start({ model: options.model, workspace: options.workspace });
   const server = createGuiHostServer({
     listModels,
-    listSessions,
+    listSessions: () =>
+      listChatSessions().map((session) => ({
+        messageCount: session.messageCount,
+        prompt: session.name,
+        savedAt: session.savedAt,
+        sessionId: session.id,
+      })),
+    loadSession: (sessionId) =>
+      loadSession(sessionId)
+        ?.filter((message) => message.role !== 'system')
+        .map((message) => ({
+          content: message.content,
+          role: message.role as 'user' | 'assistant',
+        })) ?? null,
     port: options.port,
     runtime,
     token,
