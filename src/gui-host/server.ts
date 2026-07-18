@@ -4,6 +4,7 @@ import type { GuiCommandResult } from './contracts';
 import type { GuiEventStore } from './event-store';
 import { parseBackend, type AgentBackend } from '../runtime/backend';
 import type { RuntimeMode, RuntimeModel } from '../runtime/types';
+import { createRepoStatusReader } from './repo-status';
 import { createWorkspaceStatusReader } from './workspace-status';
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -108,6 +109,7 @@ export function createGuiHostServer(
   options: GuiHostServerOptions,
 ): Bun.Server<undefined> {
   const hostname = options.hostname ?? '127.0.0.1';
+  const repoStatus = createRepoStatusReader(options.workspace);
   const workspaceStatus = createWorkspaceStatusReader(options.workspace);
   if (hostname !== '127.0.0.1' && hostname !== '::1' && hostname !== 'localhost') {
     throw new Error('GUI host must bind to a loopback address');
@@ -130,6 +132,7 @@ export function createGuiHostServer(
         if (url.pathname === '/v1/native/snapshot' && request.method === 'GET') {
           return success({
             models: await modelList(options),
+            repoStatus: repoStatus.read(),
             sessions: options.listSessions?.() ?? [],
             snapshot: options.runtime.store.snapshot(),
             workspaceStatus: workspaceStatus.read(),

@@ -128,6 +128,36 @@ export interface GuiWorkspaceStatusSnapshot {
   error?: string;
 }
 
+export interface GuiRepoRemoteSnapshot {
+  name: string;
+  url: string;
+  webUrl?: string;
+}
+
+export interface GuiRepoWorktreeSnapshot {
+  path: string;
+  branch?: string;
+  head?: string;
+  current: boolean;
+}
+
+export interface GuiRepoStatusSnapshot {
+  git: boolean;
+  repository: string;
+  branch: string;
+  upstream?: string;
+  ahead: number;
+  behind: number;
+  head?: string;
+  status: string;
+  remotes: GuiRepoRemoteSnapshot[];
+  webUrl?: string;
+  pullRequestUrl?: string;
+  actionsUrl?: string;
+  worktrees: GuiRepoWorktreeSnapshot[];
+  error?: string;
+}
+
 export interface GuiMessageSnapshot {
   role: 'user' | 'assistant';
   content: string;

@@ -50,6 +50,7 @@ const max_command_rows = 48;
 const max_workspace_changes = 16;
 const max_diff_stats = 10;
 const max_subagents = 8;
+const max_repo_worktrees = 8;
 
 const Role = enum { user, assistant };
 
@@ -199,6 +200,32 @@ pub const Subagent = struct {
     }
 };
 
+pub const RepoWorktree = struct {
+    id: u64 = 0,
+    branch_storage: [128]u8 = undefined,
+    branch_len: usize = 0,
+    path_storage: [360]u8 = undefined,
+    path_len: usize = 0,
+    head_storage: [32]u8 = undefined,
+    head_len: usize = 0,
+    current: bool = false,
+
+    pub fn branch(self: *const RepoWorktree) []const u8 {
+        if (self.branch_len == 0) return "detached";
+        return self.branch_storage[0..self.branch_len];
+    }
+
+    pub fn path(self: *const RepoWorktree) []const u8 {
+        return self.path_storage[0..self.path_len];
+    }
+
+    pub fn meta(self: *const RepoWorktree) []const u8 {
+        if (self.current) return "current worktree";
+        if (self.head_len > 0) return self.head_storage[0..self.head_len];
+        return "linked worktree";
+    }
+};
+
 pub const Model = struct {
     pub const view_unbound = .{
         "connected", "cursor", "queue_count", "host_port", "auth_token_storage", "auth_token_len",
@@ -206,12 +233,13 @@ pub const Model = struct {
         "terminal_storage", "terminal_len", "error_storage", "error_len",
         "workspace_storage", "workspace_len", "model_storage", "model_len",
         "workspace_branch_storage", "workspace_branch_len", "workspace_summary_storage", "workspace_summary_len", "workspace_git", "workspace_clean",
+        "repo_git", "repo_storage", "repo_len", "repo_head_storage", "repo_head_len", "repo_remote_storage", "repo_remote_len", "repo_pr_storage", "repo_pr_len", "repo_actions_storage", "repo_actions_len",
         "provider_storage", "provider_len", "backend_storage", "backend_len", "mode_storage", "mode_len", "permission_id_storage", "permission_id_len",
         "permission_tool_storage", "permission_tool_len", "pending_question", "question_id_storage", "question_id_len", "question_text_storage", "question_text_len",
         "question_body_storage", "messages", "message_count",
         "tools", "tool_count", "sessions", "session_count", "models", "model_count", "selected_session_key", "command_title_storage", "command_title_len",
         "command_rows", "command_row_count", "workspace_changes", "workspace_change_count", "diff_stats", "diff_stat_count", "total_tokens", "total_cost", "assistantText", "authToken",
-        "permissionId", "hasMessages", "subagents", "subagent_count",
+        "permissionId", "hasMessages", "subagents", "subagent_count", "repo_worktrees", "repo_worktree_count",
     };
 
     connected: bool = false,
@@ -238,6 +266,17 @@ pub const Model = struct {
     workspace_summary_len: usize = 0,
     workspace_git: bool = false,
     workspace_clean: bool = true,
+    repo_git: bool = false,
+    repo_storage: [1024]u8 = undefined,
+    repo_len: usize = 0,
+    repo_head_storage: [160]u8 = undefined,
+    repo_head_len: usize = 0,
+    repo_remote_storage: [360]u8 = undefined,
+    repo_remote_len: usize = 0,
+    repo_pr_storage: [360]u8 = undefined,
+    repo_pr_len: usize = 0,
+    repo_actions_storage: [360]u8 = undefined,
+    repo_actions_len: usize = 0,
     model_storage: [256]u8 = undefined,
     model_len: usize = 0,
     provider_storage: [96]u8 = undefined,
@@ -276,6 +315,8 @@ pub const Model = struct {
     diff_stat_count: usize = 0,
     subagents: [max_subagents]Subagent = [_]Subagent{.{}} ** max_subagents,
     subagent_count: usize = 0,
+    repo_worktrees: [max_repo_worktrees]RepoWorktree = [_]RepoWorktree{.{}} ** max_repo_worktrees,
+    repo_worktree_count: usize = 0,
     total_tokens: u64 = 0,
     total_cost: f64 = 0,
 
@@ -305,6 +346,26 @@ pub const Model = struct {
     pub fn workspaceSummary(self: *const Model) []const u8 {
         if (self.workspace_summary_len == 0) return "Workspace status unavailable";
         return self.workspace_summary_storage[0..self.workspace_summary_len];
+    }
+    pub fn repoLabel(self: *const Model) []const u8 {
+        if (self.repo_len == 0) return "Repository unavailable";
+        return self.repo_storage[0..self.repo_len];
+    }
+    pub fn repoHeadLabel(self: *const Model) []const u8 {
+        if (self.repo_head_len == 0) return "No commits yet";
+        return self.repo_head_storage[0..self.repo_head_len];
+    }
+    pub fn repoRemoteLabel(self: *const Model) []const u8 {
+        if (self.repo_remote_len == 0) return "No GitHub remote";
+        return self.repo_remote_storage[0..self.repo_remote_len];
+    }
+    pub fn repoPrLabel(self: *const Model) []const u8 {
+        if (self.repo_pr_len == 0) return "PR link unavailable";
+        return self.repo_pr_storage[0..self.repo_pr_len];
+    }
+    pub fn repoActionsLabel(self: *const Model) []const u8 {
+        if (self.repo_actions_len == 0) return "CI link unavailable";
+        return self.repo_actions_storage[0..self.repo_actions_len];
     }
     pub fn modelLabel(self: *const Model) []const u8 {
         if (self.model_len == 0) return "Default model";
@@ -352,6 +413,9 @@ pub const Model = struct {
     pub fn subagentItems(self: *const Model) []const Subagent {
         return self.subagents[0..self.subagent_count];
     }
+    pub fn repoWorktreeItems(self: *const Model) []const RepoWorktree {
+        return self.repo_worktrees[0..self.repo_worktree_count];
+    }
     pub fn messageItems(self: *const Model) []const Message {
         return self.messages[0..self.message_count];
     }
@@ -396,6 +460,12 @@ pub const Model = struct {
     }
     pub fn hasSubagents(self: *const Model) bool {
         return self.subagent_count > 0;
+    }
+    pub fn hasRepo(self: *const Model) bool {
+        return self.repo_git;
+    }
+    pub fn hasRepoWorktrees(self: *const Model) bool {
+        return self.repo_worktree_count > 0;
     }
     pub fn usageLabel(self: *const Model, arena: std.mem.Allocator) []const u8 {
         return std.fmt.allocPrint(arena, "{d} tokens · ${d:.4}", .{ self.total_tokens, self.total_cost }) catch "Usage unavailable";
@@ -972,11 +1042,35 @@ const WorkspaceStatusPayload = struct {
     changes: []const WorkspaceChangePayload = &.{},
     diffStat: []const []const u8 = &.{},
 };
+const RepoRemotePayload = struct {
+    name: []const u8 = "",
+    url: []const u8 = "",
+    webUrl: ?[]const u8 = null,
+};
+const RepoWorktreePayload = struct {
+    path: []const u8 = "",
+    branch: ?[]const u8 = null,
+    head: ?[]const u8 = null,
+    current: bool = false,
+};
+const RepoStatusPayload = struct {
+    git: bool = false,
+    repository: []const u8 = "",
+    branch: []const u8 = "",
+    head: ?[]const u8 = null,
+    status: []const u8 = "",
+    remotes: []const RepoRemotePayload = &.{},
+    webUrl: ?[]const u8 = null,
+    pullRequestUrl: ?[]const u8 = null,
+    actionsUrl: ?[]const u8 = null,
+    worktrees: []const RepoWorktreePayload = &.{},
+};
 const NativeData = struct {
     snapshot: SnapshotPayload = .{},
     sessions: []const SessionPayload = &.{},
     models: []const ModelPayload = &.{},
     workspaceStatus: WorkspaceStatusPayload = .{},
+    repoStatus: RepoStatusPayload = .{},
 };
 const NativeEnvelope = struct { ok: bool = false, data: ?NativeData = null };
 const SessionData = struct {
@@ -1125,6 +1219,28 @@ pub fn applySnapshotJson(model: *Model, body: []const u8) bool {
         const target = &model.diff_stats[index];
         target.id = index + 1;
         target.len = copyText(&target.storage, row);
+    }
+
+    const repo_status = data.repoStatus;
+    model.repo_git = repo_status.git;
+    model.repo_len = copyText(&model.repo_storage, repo_status.repository);
+    model.repo_head_len = copyText(&model.repo_head_storage, repo_status.head orelse "");
+    model.repo_pr_len = copyText(&model.repo_pr_storage, repo_status.pullRequestUrl orelse "");
+    model.repo_actions_len = copyText(&model.repo_actions_storage, repo_status.actionsUrl orelse "");
+    model.repo_remote_len = 0;
+    if (repo_status.webUrl) |web_url| {
+        model.repo_remote_len = copyText(&model.repo_remote_storage, web_url);
+    } else if (repo_status.remotes.len > 0) {
+        model.repo_remote_len = copyText(&model.repo_remote_storage, repo_status.remotes[0].url);
+    }
+    model.repo_worktree_count = @min(repo_status.worktrees.len, max_repo_worktrees);
+    for (repo_status.worktrees[0..model.repo_worktree_count], 0..) |worktree, index| {
+        const target = &model.repo_worktrees[index];
+        target.id = std.hash.Wyhash.hash(0, worktree.path);
+        target.branch_len = copyText(&target.branch_storage, worktree.branch orelse "");
+        target.path_len = copyText(&target.path_storage, worktree.path);
+        target.head_len = copyText(&target.head_storage, worktree.head orelse "");
+        target.current = worktree.current;
     }
 
     if (snapshot.pendingPermission) |permission| {

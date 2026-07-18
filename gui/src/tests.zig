@@ -7,7 +7,7 @@ const testing = std.testing;
 test "snapshot JSON populates conversation, tools, sessions, and usage" {
     var model = main.initialModel();
     const body =
-        \\{"ok":true,"data":{"snapshot":{"cursor":9,"processing":true,"assistantText":"Working","thinkingText":"Inspecting repo","terminalOutput":"3 pass\\n","workspace":"/repo","model":"model-a","provider":"cloudflare","usage":{"input":10,"output":5,"cacheRead":2,"cacheWrite":0,"totalTokens":17,"cost":0.03},"messages":[{"role":"user","content":"Fix tests"},{"role":"assistant","content":"Working"}],"tools":[{"id":"tool-1","name":"bash","summary":"bun test","status":"completed","isError":false,"durationMs":20}],"subagents":[{"id":"sub-1","query":"Audit auth parity","status":"running","pid":1234,"durationMs":2500}],"pendingPermission":{"requestId":"perm-1","toolName":"edit","args":{"path":"src/a.ts"}},"pendingQuestion":{"requestId":"question-1","questions":[{"id":"choice","question":"Ship with tests?","type":"input"}]}},"sessions":[{"sessionId":"session-a","prompt":"Fix tests","cwd":"/repo"}],"models":[{"id":"model-a","displayName":"Model A"}],"workspaceStatus":{"git":true,"branch":"main","clean":false,"summary":"2 changed · 1 unstaged · 1 untracked","changes":[{"status":"M","path":"src/main.ts"},{"status":"??","path":"notes.md"}],"diffStat":["src/main.ts | 2 +-","1 file changed, 1 insertion(+), 1 deletion(-)"]}}}
+        \\{"ok":true,"data":{"snapshot":{"cursor":9,"processing":true,"assistantText":"Working","thinkingText":"Inspecting repo","terminalOutput":"3 pass\\n","workspace":"/repo","model":"model-a","provider":"cloudflare","usage":{"input":10,"output":5,"cacheRead":2,"cacheWrite":0,"totalTokens":17,"cost":0.03},"messages":[{"role":"user","content":"Fix tests"},{"role":"assistant","content":"Working"}],"tools":[{"id":"tool-1","name":"bash","summary":"bun test","status":"completed","isError":false,"durationMs":20}],"subagents":[{"id":"sub-1","query":"Audit auth parity","status":"running","pid":1234,"durationMs":2500}],"pendingPermission":{"requestId":"perm-1","toolName":"edit","args":{"path":"src/a.ts"}},"pendingQuestion":{"requestId":"question-1","questions":[{"id":"choice","question":"Ship with tests?","type":"input"}]}},"sessions":[{"sessionId":"session-a","prompt":"Fix tests","cwd":"/repo"}],"models":[{"id":"model-a","displayName":"Model A"}],"workspaceStatus":{"git":true,"branch":"main","clean":false,"summary":"2 changed · 1 unstaged · 1 untracked","changes":[{"status":"M","path":"src/main.ts"},{"status":"??","path":"notes.md"}],"diffStat":["src/main.ts | 2 +-","1 file changed, 1 insertion(+), 1 deletion(-)"]},"repoStatus":{"git":true,"repository":"/repo","branch":"main","head":"abc1234 initial","status":"2 changed","webUrl":"https://github.com/owner/repo","pullRequestUrl":"https://github.com/owner/repo/pulls?q=is%3Apr+head%3Amain","actionsUrl":"https://github.com/owner/repo/actions?query=branch%3Amain","remotes":[{"name":"origin","url":"git@github.com:owner/repo.git","webUrl":"https://github.com/owner/repo"}],"worktrees":[{"path":"/repo","branch":"main","head":"abc1234","current":true}]}}}
     ;
 
     try testing.expect(main.applySnapshotJson(&model, body));
@@ -40,6 +40,14 @@ test "snapshot JSON populates conversation, tools, sessions, and usage" {
     try testing.expectEqualStrings("M", model.workspace_changes[0].status());
     try testing.expectEqual(@as(usize, 2), model.diff_stat_count);
     try testing.expectEqualStrings("src/main.ts | 2 +-", model.diff_stats[0].text());
+    try testing.expect(model.hasRepo());
+    try testing.expectEqualStrings("/repo", model.repoLabel());
+    try testing.expectEqualStrings("abc1234 initial", model.repoHeadLabel());
+    try testing.expectEqualStrings("https://github.com/owner/repo", model.repoRemoteLabel());
+    try testing.expectEqualStrings("https://github.com/owner/repo/pulls?q=is%3Apr+head%3Amain", model.repoPrLabel());
+    try testing.expectEqual(@as(usize, 1), model.repo_worktree_count);
+    try testing.expectEqualStrings("main", model.repo_worktrees[0].branch());
+    try testing.expectEqualStrings("current worktree", model.repo_worktrees[0].meta());
     try testing.expect(model.permission_pending);
     try testing.expectEqualStrings("perm-1", model.permissionId());
     try testing.expect(model.pending_question);

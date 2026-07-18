@@ -310,6 +310,59 @@
             </column>
 
             <column gap="8">
+              <row height="24" cross="center">
+                <text grow="1" foreground="text_muted">Orchestration</text>
+                <badge variant="secondary">{workspaceBranch}</badge>
+              </row>
+              <panel padding="12">
+                <if test="{hasRepo}">
+                  <column gap="10">
+                    <row gap="8" cross="center">
+                      <icon name="folder" size="sm" />
+                      <column gap="2" grow="1">
+                        <text wrap="true">{workspaceBranch}</text>
+                        <text wrap="true" foreground="text_muted">{workspaceSummary}</text>
+                      </column>
+                      <badge variant="secondary">{modeLabel}</badge>
+                    </row>
+                    <separator />
+                    <column gap="5">
+                      <text wrap="true" foreground="text_muted">{repoLabel}</text>
+                      <text wrap="true" foreground="text_muted">{repoHeadLabel}</text>
+                      <text wrap="true" foreground="text_muted">{repoRemoteLabel}</text>
+                      <text wrap="true" foreground="text_muted">{repoPrLabel}</text>
+                      <text wrap="true" foreground="text_muted">{repoActionsLabel}</text>
+                    </column>
+                    <if test="{hasRepoWorktrees}">
+                      <accordion text="Worktrees">
+                        <column gap="4">
+                          <for each="repoWorktreeItems" key="id" as="worktree">
+                            <list-item icon="circle-dot" selected="{worktree.current}" label="Worktree">
+                              <column gap="1" grow="1">
+                                <text wrap="true">{worktree.branch}</text>
+                                <text wrap="true" foreground="text_muted">{worktree.path}</text>
+                              </column>
+                              <badge variant="secondary">{worktree.meta}</badge>
+                            </list-item>
+                          </for>
+                        </column>
+                      </accordion>
+                    </if>
+                  </column>
+                </if>
+                <else>
+                  <column gap="6">
+                    <row gap="8" cross="center">
+                      <icon name="circle-dot" size="sm" />
+                      <text grow="1">No git repository detected.</text>
+                    </row>
+                    <text wrap="true" foreground="text_muted">Open a git workspace to enable branch, PR, CI, and worktree context.</text>
+                  </column>
+                </else>
+              </panel>
+            </column>
+
+            <column gap="8">
               <text foreground="text_muted">Review</text>
               <row gap="6">
                 <button grow="1" size="sm" variant="secondary" on-press="command_changes">Changes</button>

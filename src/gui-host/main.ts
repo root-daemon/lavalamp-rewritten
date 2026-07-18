@@ -30,6 +30,7 @@ import {
   loadSession,
 } from '../tui/sessions';
 import type { GuiCommandResult } from './contracts';
+import { formatRepoStatusRows, readRepoStatus } from './repo-status';
 import { GuiRuntime } from './runtime';
 import { createGuiHostServer } from './server';
 import { readWorkspaceStatus } from './workspace-status';
@@ -519,98 +520,7 @@ function readWorkspaceSummary(workspace: string): GuiCommandResult {
 }
 
 function readRepoOverview(workspace: string): GuiCommandResult {
-  const repo = runGit(workspace, ['rev-parse', '--show-toplevel']);
-  if (repo.status !== 0) {
-    return { title: '/repo', rows: ['No git repository found.'] };
-  }
-  const status = readWorkspaceStatus(workspace);
-  const repoRoot = repo.stdout.trim() || workspace;
-  const head = runGit(workspace, ['log', '-1', '--pretty=format:%h %s']);
-  const remoteNames = runGit(workspace, ['remote']);
-  const remotes = remoteNames.status === 0
-    ? remoteNames.stdout.split('\n').map((line) => line.trim()).filter(Boolean)
-    : [];
-  const remoteRows = remotes.flatMap((name) => {
-    const url = runGit(workspace, ['remote', 'get-url', name]);
-    if (url.status !== 0) return [`${name}: unavailable`];
-    return [`${name}: ${url.stdout.trim()}`];
-  });
-  const originUrl = remoteRows
-    .find((row) => row.startsWith('origin: '))
-    ?.slice('origin: '.length);
-  const webUrl = originUrl === undefined ? null : githubWebUrl(originUrl);
-  const branch = status.branch === 'detached' ? currentCommit(workspace) : status.branch;
-  const branchQuery = encodeURIComponent(branch);
-  const worktrees = parseWorktrees(runGit(workspace, ['worktree', 'list', '--porcelain']).stdout);
-
-  return {
-    title: '/repo',
-    rows: [
-      `repository: ${repoRoot}`,
-      `branch: ${status.branch}${status.upstream === undefined ? '' : ` -> ${status.upstream}`}`,
-      `head: ${head.status === 0 ? head.stdout.trim() : firstGitError(head)}`,
-      `sync: ahead ${status.ahead ?? 0} · behind ${status.behind ?? 0}`,
-      `status: ${status.summary}`,
-      '',
-      'remotes:',
-      ...(remoteRows.length === 0 ? ['No remotes configured.'] : remoteRows),
-      '',
-      'links:',
-      ...(webUrl === null
-        ? ['No GitHub remote detected.']
-        : [
-            `github: ${webUrl}`,
-            `pull requests: ${webUrl}/pulls?q=is%3Apr+head%3A${branchQuery}`,
-            `actions: ${webUrl}/actions?query=branch%3A${branchQuery}`,
-          ]),
-      '',
-      'worktrees:',
-      ...(worktrees.length === 0
-        ? ['No worktrees found.']
-        : worktrees.map((worktree) => {
-            const branchLabel = worktree.branch ?? worktree.head ?? 'unknown';
-            return `${branchLabel.padEnd(24)} ${worktree.path}`;
-          })),
-    ],
-  };
-}
-
-function currentCommit(workspace: string): string {
-  const commit = runGit(workspace, ['rev-parse', '--short', 'HEAD']);
-  return commit.status === 0 ? commit.stdout.trim() : 'detached';
-}
-
-function githubWebUrl(remoteUrl: string): string | null {
-  const trimmed = remoteUrl.trim().replace(/\.git$/, '');
-  const ssh = /^git@github\.com:([^/]+)\/(.+)$/.exec(trimmed);
-  if (ssh !== null) return `https://github.com/${ssh[1]}/${ssh[2]}`;
-  const https = /^https:\/\/github\.com\/([^/]+)\/(.+)$/.exec(trimmed);
-  if (https !== null) return `https://github.com/${https[1]}/${https[2]}`;
-  return null;
-}
-
-function parseWorktrees(raw: string): Array<{ path: string; head?: string; branch?: string }> {
-  const worktrees: Array<{ path: string; head?: string; branch?: string }> = [];
-  let current: { path: string; head?: string; branch?: string } | null = null;
-  for (const line of raw.split('\n')) {
-    if (line.length === 0) {
-      if (current !== null) worktrees.push(current);
-      current = null;
-      continue;
-    }
-    const [key, ...rest] = line.split(' ');
-    const value = rest.join(' ');
-    if (key === 'worktree') {
-      if (current !== null) worktrees.push(current);
-      current = { path: value };
-    } else if (current !== null && key === 'HEAD') {
-      current.head = value.slice(0, 7);
-    } else if (current !== null && key === 'branch') {
-      current.branch = value.replace(/^refs\/heads\//, '');
-    }
-  }
-  if (current !== null) worktrees.push(current);
-  return worktrees;
+  return { title: '/repo', rows: formatRepoStatusRows(readRepoStatus(workspace)) };
 }
 
 function readProjectMemory(workspace: string): GuiCommandResult {
