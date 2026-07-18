@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { AnalyticsRecorder } from '../analytics';
 import type {
   OnBashStream,
   OnPermissionRequest,
@@ -8,7 +10,7 @@ import type {
 import type { AgentBackend } from '../runtime/backend';
 import { createRuntimeProcess } from '../runtime/process';
 import type { RuntimeCallbacks, RuntimeMode, RuntimeModel } from '../runtime/types';
-import type { GuiPermissionDecision } from './contracts';
+import type { GuiPermissionDecision, GuiQuestion } from './contracts';
 import { GuiEventStore } from './event-store';
 
 export interface GuiProcess {
@@ -33,6 +35,7 @@ export interface GuiProcess {
     answers: Record<string, unknown>,
   ): void;
   cancel(): void;
+  clearThread?(): void;
   restart?(): Promise<void>;
   setAgentName?(name: string): void;
   compact?(): Promise<unknown>;
@@ -57,6 +60,15 @@ export class GuiRuntime {
   private mode: RuntimeMode;
   private model?: string;
   private sessionId?: string;
+  private sudo = false;
+  private analytics?: AnalyticsRecorder;
+  private analyticsTurn?: string;
+  private queuedPrompts: Array<{
+    prompt: string;
+    sessionId?: string;
+    images: PromptImage[];
+  }> = [];
+  private pendingImages: PromptImage[] = [];
 
   constructor(options: GuiRuntimeOptions & {
     backend?: AgentBackend;
@@ -74,6 +86,7 @@ export class GuiRuntime {
     this.serverPath = options.serverPath;
     this.sessionId = options.sessionId;
     this.workspace = options.workspace;
+    this.startAnalytics();
   }
 
   static create(options: {
@@ -120,6 +133,7 @@ export class GuiRuntime {
 
   private wireProcess(): void {
     this.process.onPermissionRequest = (request) => {
+      this.analytics?.event('permission', 'requested', this.analyticsTurn);
       this.store.append({
         args: request.args,
         requestId: request.requestId,
@@ -128,8 +142,9 @@ export class GuiRuntime {
       });
     };
     this.process.onQuestionRequest = (request) => {
+      this.analytics?.event('question', 'requested', this.analyticsTurn);
       this.store.append({
-        questions: request.questions,
+        questions: normalizeQuestions(request.questions),
         requestId: request.requestId,
         type: 'question.requested',
       });
@@ -150,25 +165,36 @@ export class GuiRuntime {
       throw new Error('Prompt is required');
     }
     this.store.append({ content: trimmed, type: 'user.message' });
+    const images = this.pendingImages.splice(0);
     return this.process.prompt(trimmed, {
       onError: (error) => {
+        this.finishAnalyticsTurn('failed');
         this.store.append({ message: error.message, type: 'turn.failed' });
+        this.scheduleQueuedPrompt();
       },
       onEvent: (event) => {
         switch (event.type) {
           case 'text_delta':
+            this.analytics?.firstResponse(this.analyticsTurn);
             this.store.append({
               delta: event.text ?? event.delta ?? '',
               type: 'text.delta',
             });
             break;
           case 'thinking_delta':
+            this.analytics?.firstResponse(this.analyticsTurn);
             this.store.append({
               delta: event.delta ?? event.content ?? '',
               type: 'thinking.delta',
             });
             break;
           case 'tool_start':
+            this.analytics?.toolStarted(
+              this.analyticsTurn,
+              event.toolCallId,
+              event.toolName ?? 'unknown',
+              event.args,
+            );
             this.store.append({
               args: event.args ?? {},
               toolCallId: event.toolCallId ?? `tool-${Date.now()}`,
@@ -177,6 +203,13 @@ export class GuiRuntime {
             });
             break;
           case 'tool':
+            this.analytics?.toolFinished(
+              this.analyticsTurn,
+              event.toolCallId,
+              event.toolName ?? 'unknown',
+              event.durationMs,
+              Boolean(event.isError),
+            );
             this.store.append({
               durationMs: event.durationMs,
               isError: Boolean(event.isError),
@@ -191,6 +224,11 @@ export class GuiRuntime {
         }
       },
       onResult: (result) => {
+        this.analytics?.finishTurn(this.analyticsTurn, 'completed', {
+          model: result.model,
+          usage: result.usage,
+        });
+        this.analyticsTurn = undefined;
         this.store.append({
           backend: result.backend ?? this.backend,
           model: result.model.id,
@@ -205,11 +243,54 @@ export class GuiRuntime {
             totalTokens: result.usage.totalTokens,
           },
         });
+        this.scheduleQueuedPrompt();
       },
       onStarted: () => {
+        this.analyticsTurn = this.analytics?.startTurn();
         this.store.append({ type: 'turn.started' });
       },
-    }, sessionId);
+    }, sessionId, images);
+  }
+
+  queuePrompt(prompt: string, sessionId?: string): string {
+    const trimmed = prompt.trim();
+    if (trimmed.length === 0) throw new Error('Prompt is required');
+    if (!this.store.snapshot().processing && this.queuedPrompts.length === 0) {
+      return this.submitPrompt(trimmed, sessionId);
+    }
+    this.queuedPrompts.push({
+      images: this.pendingImages.splice(0),
+      prompt: trimmed,
+      sessionId,
+    });
+    return `queued-${this.queuedPrompts.length}`;
+  }
+
+  attachImage(path: string): void {
+    this.pendingImages.push({
+      data: this.backend === 'codex' ? '' : readFileSync(path).toString('base64'),
+      mimeType: 'image/png',
+      path,
+      type: 'image',
+    });
+  }
+
+  private scheduleQueuedPrompt(): void {
+    queueMicrotask(() => {
+      if (this.store.snapshot().processing) return;
+      const next = this.queuedPrompts.shift();
+      if (next === undefined) return;
+      try {
+        this.pendingImages.unshift(...next.images);
+        this.submitPrompt(next.prompt, next.sessionId);
+      } catch (error) {
+        this.store.append({
+          message: error instanceof Error ? error.message : String(error),
+          type: 'turn.failed',
+        });
+        this.scheduleQueuedPrompt();
+      }
+    });
   }
 
   async setMode(mode: RuntimeMode): Promise<void> {
@@ -250,6 +331,7 @@ export class GuiRuntime {
       throw new Error('Runtime factory is unavailable');
     }
 
+    this.finishAnalyticsRun('completed');
     await this.process.shutdown();
     this.backend = backend;
     this.sessionId = `session_${Date.now()}`;
@@ -261,9 +343,11 @@ export class GuiRuntime {
       model: this.model,
       serverPath: this.serverPath,
       sessionId: this.sessionId,
+      sudo: this.sudo,
     });
     this.wireProcess();
     await this.process.start();
+    this.startAnalytics();
     this.store.resetConversation();
     this.store.append({
       backend,
@@ -271,6 +355,65 @@ export class GuiRuntime {
       model: this.model,
       type: 'backend.changed',
     });
+  }
+
+  async setSudo(enabled: boolean): Promise<void> {
+    if (this.store.snapshot().processing) {
+      throw new Error('Cannot change sudo mode while a turn is running');
+    }
+    this.sudo = enabled;
+    this.sessionId = `session_${Date.now()}`;
+    if (this.serverPath !== undefined && this.workspace !== undefined) {
+      this.finishAnalyticsRun('completed');
+      await this.process.shutdown();
+      this.process = createRuntimeProcess({
+        agentName: modeToAgentName(this.mode),
+        allowModelFallback: this.backend === 'codex',
+        backend: this.backend,
+        cwd: this.workspace,
+        model: this.model,
+        serverPath: this.serverPath,
+        sessionId: this.sessionId,
+        sudo: enabled,
+      });
+      this.wireProcess();
+      await this.process.start();
+      this.startAnalytics();
+    } else {
+      await this.process.restart?.();
+    }
+    this.store.resetConversation();
+  }
+
+  async newSession(): Promise<void> {
+    this.queuedPrompts = [];
+    this.pendingImages = [];
+    if (this.store.snapshot().processing) {
+      this.process.cancel();
+      this.finishAnalyticsTurn('interrupted');
+    }
+    this.sessionId = `session_${Date.now()}`;
+    if (this.serverPath !== undefined && this.workspace !== undefined) {
+      this.finishAnalyticsRun('completed');
+      await this.process.shutdown();
+      this.process = createRuntimeProcess({
+        agentName: modeToAgentName(this.mode),
+        allowModelFallback: this.backend === 'codex',
+        backend: this.backend,
+        cwd: this.workspace,
+        model: this.model,
+        serverPath: this.serverPath,
+        sessionId: this.sessionId,
+        sudo: this.sudo,
+      });
+      this.wireProcess();
+      await this.process.start();
+      this.startAnalytics();
+    } else {
+      this.process.clearThread?.();
+      await this.process.restart?.();
+    }
+    this.store.resetConversation();
   }
 
   async compact(): Promise<void> {
@@ -304,6 +447,7 @@ export class GuiRuntime {
       decision === 'deny' ? 'deny' : 'allow',
       decision === 'always_allow',
     );
+    this.analytics?.event('permission', decision, this.analyticsTurn);
     this.store.append({ decision, requestId, type: 'permission.resolved' });
   }
 
@@ -316,20 +460,89 @@ export class GuiRuntime {
       throw new Error('Question request is no longer pending');
     }
     this.process.sendQuestionResponse(requestId, answers);
+    this.analytics?.event('question', 'answered', this.analyticsTurn);
     this.store.append({ requestId, type: 'question.resolved' });
   }
 
   cancel(): void {
+    this.queuedPrompts = [];
+    this.pendingImages = [];
     if (!this.store.snapshot().processing) {
       return;
     }
     this.process.cancel();
+    this.finishAnalyticsTurn('interrupted');
     this.store.append({ type: 'turn.cancelled' });
   }
 
   async shutdown(): Promise<void> {
+    if (this.store.snapshot().processing) this.finishAnalyticsTurn('interrupted');
+    this.finishAnalyticsRun('completed');
     await this.process.shutdown();
   }
+
+  private startAnalytics(): void {
+    if (this.workspace === undefined) return;
+    this.analytics = AnalyticsRecorder.create({
+      agent: this.mode,
+      conversationSessionId: this.sessionId,
+      mode: 'gui',
+      workspaceRoot: this.workspace,
+    });
+  }
+
+  private finishAnalyticsTurn(status: 'failed' | 'interrupted'): void {
+    this.analytics?.finishTurn(this.analyticsTurn, status);
+    this.analyticsTurn = undefined;
+  }
+
+  private finishAnalyticsRun(status: 'completed' | 'interrupted'): void {
+    this.analytics?.finish(status);
+    this.analytics?.close();
+    this.analytics = undefined;
+    this.analyticsTurn = undefined;
+  }
+}
+
+function normalizeQuestions(questions: unknown[]): GuiQuestion[] {
+  return questions.flatMap((value, index) => {
+    if (value === null || typeof value !== 'object') return [];
+    const raw = value as Record<string, unknown>;
+    const id = typeof raw.id === 'string' && raw.id.length > 0
+      ? raw.id
+      : `question-${index + 1}`;
+    const type = raw.type === 'multiselect'
+      ? 'multiselect'
+      : raw.type === 'select'
+        ? 'select'
+        : 'input';
+    const options = Array.isArray(raw.options)
+      ? raw.options.flatMap((option) => {
+          if (typeof option === 'string') return [option];
+          if (option !== null && typeof option === 'object') {
+            const label = (option as Record<string, unknown>).label;
+            return typeof label === 'string' ? [label] : [];
+          }
+          return [];
+        })
+      : [];
+    const defaultValue =
+      typeof raw.default === 'string' ||
+      (Array.isArray(raw.default) && raw.default.every((item) => typeof item === 'string'))
+        ? raw.default as string | string[]
+        : undefined;
+    return [{
+      defaultValue,
+      id,
+      options,
+      question: typeof raw.question === 'string'
+        ? raw.question
+        : typeof raw.label === 'string'
+          ? raw.label
+          : 'Please provide an answer.',
+      type,
+    }];
+  });
 }
 
 function agentNameToMode(agentName: string): RuntimeMode {

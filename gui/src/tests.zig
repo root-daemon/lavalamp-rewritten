@@ -7,7 +7,7 @@ const testing = std.testing;
 test "snapshot JSON populates conversation, tools, sessions, and usage" {
     var model = main.initialModel();
     const body =
-        \\{"ok":true,"data":{"snapshot":{"cursor":9,"processing":true,"assistantText":"Working","thinkingText":"Inspecting repo","terminalOutput":"3 pass\\n","workspace":"/repo","model":"model-a","provider":"cloudflare","usage":{"input":10,"output":5,"cacheRead":2,"cacheWrite":0,"totalTokens":17,"cost":0.03},"messages":[{"role":"user","content":"Fix tests"},{"role":"assistant","content":"Working"}],"tools":[{"id":"tool-1","name":"bash","summary":"bun test","status":"completed","isError":false,"durationMs":20}],"pendingPermission":{"requestId":"perm-1","toolName":"edit","args":{"path":"src/a.ts"}}},"sessions":[{"sessionId":"session-a","prompt":"Fix tests","cwd":"/repo"}],"models":[{"id":"model-a","displayName":"Model A"}]}}
+        \\{"ok":true,"data":{"snapshot":{"cursor":9,"processing":true,"assistantText":"Working","thinkingText":"Inspecting repo","terminalOutput":"3 pass\\n","workspace":"/repo","model":"model-a","provider":"cloudflare","usage":{"input":10,"output":5,"cacheRead":2,"cacheWrite":0,"totalTokens":17,"cost":0.03},"messages":[{"role":"user","content":"Fix tests"},{"role":"assistant","content":"Working"}],"tools":[{"id":"tool-1","name":"bash","summary":"bun test","status":"completed","isError":false,"durationMs":20}],"pendingPermission":{"requestId":"perm-1","toolName":"edit","args":{"path":"src/a.ts"}},"pendingQuestion":{"requestId":"question-1","questions":[{"id":"choice","question":"Which interface?","type":"select","options":["Native","TUI"]}]}},"sessions":[{"sessionId":"session-a","prompt":"Fix tests","cwd":"/repo"}],"models":[{"id":"model-a","displayName":"Model A"}]}}
     ;
 
     try testing.expect(main.applySnapshotJson(&model, body));
@@ -24,6 +24,9 @@ test "snapshot JSON populates conversation, tools, sessions, and usage" {
     try testing.expectEqualStrings("session-a", model.sessions[0].id());
     try testing.expect(model.permission_pending);
     try testing.expectEqualStrings("perm-1", model.permissionId());
+    try testing.expect(model.questionPending());
+    try testing.expectEqualStrings("Which interface?", model.currentQuestionText());
+    try testing.expectEqual(@as(usize, 2), model.questionOptionItems().len);
     try testing.expectEqual(@as(u64, 17), model.total_tokens);
 }
 
@@ -76,6 +79,79 @@ test "sending prompt records user message and emits raw HTTP request" {
     try testing.expect(std.mem.endsWith(u8, request.url, "/v1/native/prompts"));
 }
 
+test "active turn can queue a follow-up prompt" {
+    var model = main.initialModel();
+    model.connected = true;
+    model.processing = true;
+    model.host_port = 34197;
+    model.setAuthToken("token-123");
+    model.draft.set("Then run the full suite");
+    var fx = main.Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+
+    main.update(&model, .queue_prompt, &fx);
+
+    try testing.expect(model.draft.isEmpty());
+    const request = fx.pendingFetchAt(0).?;
+    try testing.expectEqualStrings("Then run the full suite", request.body);
+    try testing.expect(std.mem.endsWith(u8, request.url, "/v1/native/queue"));
+}
+
+test "starter actions prepare editable prompts" {
+    var model = main.initialModel();
+    var fx = main.Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+
+    main.update(&model, .starter_tests, &fx);
+
+    try testing.expect(std.mem.indexOf(u8, model.draftText(), "test suite") != null);
+    try testing.expectEqual(@as(usize, 0), fx.pendingFetchCount());
+}
+
+test "question answer posts structured response" {
+    var model = main.initialModel();
+    model.connected = true;
+    model.host_port = 34197;
+    model.setAuthToken("token-123");
+    try testing.expect(main.applySnapshotJson(&model,
+        \\{"ok":true,"data":{"snapshot":{"pendingQuestion":{"requestId":"question-1","questions":[{"id":"name","question":"What should this be called?","type":"input","options":[]}]}}}}
+    ));
+    model.question_answer.set("Lavalamp");
+    var fx = main.Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+
+    main.update(&model, .question_next, &fx);
+
+    try testing.expectEqual(@as(usize, 1), fx.pendingFetchCount());
+    const request = fx.pendingFetchAt(0).?;
+    try testing.expect(std.mem.endsWith(u8, request.url, "/v1/questions/question-1"));
+    try testing.expect(std.mem.indexOf(u8, request.body, "\"name\":\"Lavalamp\"") != null);
+}
+
+test "model selection posts typed control action" {
+    var model = main.initialModel();
+    model.connected = true;
+    model.host_port = 34197;
+    model.setAuthToken("token-123");
+    try testing.expect(main.applySnapshotJson(&model,
+        \\{"ok":true,"data":{"snapshot":{"model":"model-a"},"models":[{"id":"model-a","displayName":"Model A"},{"id":"model-b","displayName":"Model B"}]}}
+    ));
+    try testing.expectEqual(@as(usize, 2), model.modelChoiceItems().len);
+    var fx = main.Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+
+    main.update(&model, .{ .select_model = model.modelChoiceItems()[1].key }, &fx);
+
+    const request = fx.pendingFetchAt(0).?;
+    try testing.expect(std.mem.endsWith(u8, request.url, "/v1/native/control"));
+    try testing.expect(std.mem.indexOf(u8, request.body, "\"action\":\"model\"") != null);
+    try testing.expect(std.mem.indexOf(u8, request.body, "\"model\":\"model-b\"") != null);
+}
+
 test "composer edit and submit dispatch through native markup" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -99,6 +175,30 @@ test "composer edit and submit dispatch through native markup" {
     const composer = findByKind(tree.root, .textarea).?;
     const edit = tree.msgForTextEdit(composer.id, .{ .insert_text = "Ship it" }).?;
     try testing.expect(edit == .draft_edit);
+}
+
+test "error permission terminal and command branches build together" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var model = main.initialModel();
+    model.connected = true;
+    try testing.expect(main.applySnapshotJson(&model,
+        \\{"ok":true,"data":{"snapshot":{"processing":true,"assistantText":"Working","thinkingText":"Inspecting","terminalOutput":"bun test","error":"Provider unavailable","messages":[{"role":"user","content":"Fix UI"}],"tools":[{"id":"tool-1","name":"bash","summary":"bun test","status":"running"}],"pendingPermission":{"requestId":"perm-1","toolName":"edit"}},"sessions":[{"sessionId":"session-a","prompt":"Fix UI"}]}}
+    ));
+    try testing.expect(main.applyCommandJson(&model,
+        \\{"ok":true,"data":{"title":"/usage","rows":["12 tokens"]}}
+    ));
+
+    var view = try main.AppMarkup.init(arena, main.app_markup);
+    var ui = main.AppUi.init(arena);
+    const root = view.build(&ui, &model) catch |err| {
+        std.debug.print("app.native:{d}:{d}: {s}\n", .{ view.diagnostic.line, view.diagnostic.column, view.diagnostic.message });
+        return err;
+    };
+    const tree = try ui.finalize(root);
+    try testing.expect(findByKind(tree.root, .alert) != null);
+    try testing.expect(findByKind(tree.root, .accordion) != null);
 }
 
 fn findByKind(widget: native_sdk.canvas.Widget, kind: native_sdk.canvas.WidgetKind) ?native_sdk.canvas.Widget {

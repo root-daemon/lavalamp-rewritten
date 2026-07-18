@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { GuiEventStore } from '../src/gui-host/event-store';
 import { GuiRuntime, type GuiProcess } from '../src/gui-host/runtime';
 import type {
@@ -16,17 +19,24 @@ class FakeProcess implements GuiProcess {
   questionResponses: Array<[string, Record<string, unknown>]> = [];
   started = false;
   stopped = false;
+  cancelled = 0;
+  cleared = 0;
+  restarted = 0;
+  prompts: string[] = [];
+  promptImages: PromptImage[][] = [];
 
   async start(): Promise<void> {
     this.started = true;
   }
 
   prompt(
-    _message: string,
+    message: string,
     callbacks: RuntimeCallbacks,
     _sessionId?: string,
-    _images?: PromptImage[],
+    images?: PromptImage[],
   ): string {
+    this.prompts.push(message);
+    this.promptImages.push(images ?? []);
     this.callbacks = callbacks;
     callbacks.onStarted?.();
     return 'request-1';
@@ -47,7 +57,17 @@ class FakeProcess implements GuiProcess {
     this.questionResponses.push([requestId, answers]);
   }
 
-  cancel(): void {}
+  cancel(): void {
+    this.cancelled += 1;
+  }
+
+  clearThread(): void {
+    this.cleared += 1;
+  }
+
+  async restart(): Promise<void> {
+    this.restarted += 1;
+  }
 
   async shutdown(): Promise<void> {
     this.stopped = true;
@@ -152,9 +172,29 @@ describe('GUI runtime adapter', () => {
     });
     runtime.respondPermission('perm-1', 'always_allow');
     process.onQuestionRequest?.({
-      questions: [{ id: 'choice', type: 'text' }],
+      questions: [
+        {
+          default: 'Native',
+          id: 'choice',
+          options: [{ label: 'Native', value: 'native' }, 'TUI'],
+          question: 'Which interface?',
+          type: 'select',
+        },
+      ],
       requestId: 'question-1',
       type: 'question_request',
+    });
+    expect(store.snapshot().pendingQuestion).toEqual({
+      questions: [
+        {
+          defaultValue: 'Native',
+          id: 'choice',
+          options: ['Native', 'TUI'],
+          question: 'Which interface?',
+          type: 'select',
+        },
+      ],
+      requestId: 'question-1',
     });
     runtime.respondQuestion('question-1', { choice: 'native' });
 
@@ -182,5 +222,73 @@ describe('GUI runtime adapter', () => {
     });
     await runtime.shutdown();
     expect(process.stopped).toBe(true);
+  });
+
+  test('queues a follow-up prompt and starts it after the active turn', async () => {
+    const process = new FakeProcess();
+    const store = new GuiEventStore();
+    const runtime = new GuiRuntime({ process, store });
+    await runtime.start({ workspace: '/repo' });
+
+    runtime.submitPrompt('First task');
+    expect(runtime.queuePrompt('Then verify it')).toBe('queued-1');
+    process.callbacks?.onResult?.({
+      model: { id: 'model-a', provider: 'cloudflare' },
+      text: 'Done',
+      usage: { cacheRead: 0, cacheWrite: 0, cost: null, input: 1, output: 1, totalTokens: 2 },
+    });
+    await Promise.resolve();
+
+    expect(process.prompts).toEqual(['First task', 'Then verify it']);
+    expect(store.snapshot()).toMatchObject({ processing: true });
+  });
+
+  test('attaches a clipboard image to the next prompt only', async () => {
+    const process = new FakeProcess();
+    const store = new GuiEventStore();
+    const runtime = new GuiRuntime({ process, store });
+    const imagePath = join(mkdtempSync(join(tmpdir(), 'lavalamp-gui-image-')), 'image.png');
+    writeFileSync(imagePath, Buffer.from([1, 2, 3]));
+    await runtime.start({ workspace: '/repo' });
+
+    runtime.attachImage(imagePath);
+    runtime.submitPrompt('Inspect this image');
+
+    expect(process.promptImages[0]).toMatchObject([
+      { data: 'AQID', mimeType: 'image/png', path: imagePath, type: 'image' },
+    ]);
+  });
+
+  test('starts a clean runtime-backed session', async () => {
+    const process = new FakeProcess();
+    const store = new GuiEventStore();
+    const runtime = new GuiRuntime({ process, store });
+    await runtime.start({ workspace: '/repo' });
+    runtime.submitPrompt('Old task');
+
+    await runtime.newSession();
+
+    expect(process.cancelled).toBe(1);
+    expect(process.cleared).toBe(1);
+    expect(process.restarted).toBe(1);
+    expect(store.snapshot()).toMatchObject({ messages: [], processing: false, tools: [] });
+  });
+
+  test('restarts an injected runtime when sudo mode changes', async () => {
+    const process = new FakeProcess();
+    const store = new GuiEventStore();
+    const runtime = new GuiRuntime({ process, store });
+    await runtime.start({ workspace: '/repo' });
+    runtime.submitPrompt('Old task');
+    process.callbacks?.onResult?.({
+      model: { id: 'model-a', provider: 'cloudflare' },
+      text: 'Done',
+      usage: { cacheRead: 0, cacheWrite: 0, cost: null, input: 1, output: 1, totalTokens: 2 },
+    });
+
+    await runtime.setSudo(true);
+
+    expect(process.restarted).toBe(1);
+    expect(store.snapshot()).toMatchObject({ messages: [], processing: false });
   });
 });
