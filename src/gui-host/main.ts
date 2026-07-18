@@ -34,14 +34,16 @@ export async function runGuiHost(options: GuiHostMainOptions): Promise<void> {
 
   process.stdout.write(`LAVALAMP_GUI_READY ${server.port} ${token}\n`);
 
-  let stopping = false;
-  const stop = async () => {
-    if (stopping) return;
-    stopping = true;
-    server.stop(true);
-    await runtime.shutdown();
-  };
-  process.once('SIGINT', () => void stop());
-  process.once('SIGTERM', () => void stop());
-  process.once('beforeExit', () => void stop());
+  await new Promise<void>((resolve) => {
+    let stopping = false;
+    const stop = async () => {
+      if (stopping) return;
+      stopping = true;
+      server.stop(true);
+      await runtime.shutdown();
+      resolve();
+    };
+    process.once('SIGINT', () => void stop());
+    process.once('SIGTERM', () => void stop());
+  });
 }

@@ -7,6 +7,8 @@ import { preflightInteractiveAuth } from './run/auth-preflight';
 import { runPrint } from './run/headless-print';
 import { runRepl } from './run/headless-repl';
 import { offerUpdate, runUpdateCommand } from './run/update';
+import { launchGui } from './run/gui';
+import { runGuiHost } from './gui-host/main';
 import { runAnalyticsCommand } from './analytics/cli';
 import packageJson from '../package.json' with { type: 'json' };
 
@@ -70,6 +72,21 @@ if (!existsSync(serverPath)) {
   writeFileSync(serverPath, serverCode, 'utf8');
 }
 
+if (subcommand === 'gui') {
+  process.exit(launchGui({ env, repoRoot, workspace: workspaceRoot }));
+}
+
+if (subcommand === 'gui-host') {
+  await preflightInteractiveAuth({ config, env, model, outputFormat: 'text' });
+  await runGuiHost({
+    agentName: process.env.LAVALAMP_ASK === '1' ? 'explore' : 'build',
+    model,
+    serverPath,
+    workspace: workspaceRoot,
+  });
+  process.exit(0);
+}
+
 function findFlag(flags: string[]): number {
   for (const f of flags) {
     const idx = process.argv.indexOf(f);
@@ -101,6 +118,7 @@ if (helpIdx !== -1) {
 
 USAGE:
   lavalamp                       Start interactive session in current directory
+  lavalamp gui                   Start native desktop GUI in current directory
   lavalamp ask                   Start interactive read-only session to ask questions about the codebase
   lavalamp ask "PROMPT"          Ask a single question about the codebase and exit
   lavalamp -p "PROMPT"           Run a single prompt and exit

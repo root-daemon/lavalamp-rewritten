@@ -35,6 +35,17 @@ curl -fsSL https://lavalamp.marban.lol/install.sh | bash
 **How the installer works:**
 The script supports Linux and macOS, detects the architecture (including Rosetta translation), verifies a matching published checksum when available, and installs the standalone binary in `~/.agents/bin/`. The installed binary does not require Bun. Native Windows installation is not currently supported.
 
+### Native desktop GUI
+
+Lavalamp also ships an additive native desktop client. Existing TUI remains default and unchanged. GUI uses same Flue runtime, sessions, models, streaming tool activity, cancellation, and permission flow through authenticated loopback host.
+
+```bash
+bun run gui:build
+lavalamp gui
+```
+
+Use `LAVALAMP_GUI_BINARY=/absolute/path/to/lavalamp-gui` to launch custom GUI build. Native app follows current workspace or `LAVALAMP_WORKSPACE`.
+
 Alternatively, build from source:
 ```bash
 git clone https://github.com/rahuletto/lavalamp.git

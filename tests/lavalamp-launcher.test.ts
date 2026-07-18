@@ -15,4 +15,14 @@ describe('bin/lavalamp launcher environment', () => {
     expect(callerAwarePorts).toHaveLength(runtimeInvocations.length);
     expect(launcher).not.toContain('PORT=48392 bun src/run.ts');
   });
+
+  test('routes gui and hidden gui-host subcommands without changing default TUI', async () => {
+    const launcher = await readFile(
+      resolve(import.meta.dir, '../bin/lavalamp'),
+      'utf8',
+    );
+    expect(launcher).toContain('gui|gui-host)');
+    expect(launcher).toContain('bun run "${REPO_DIR}/src/run.ts" "$@"');
+    expect(launcher).toContain('else\n  EXTRA_ARGS=()');
+  });
 });
