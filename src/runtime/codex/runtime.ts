@@ -22,11 +22,13 @@ import type {
 import { assertBackendSupported } from '../backend';
 import { approvalResponse, type ApprovalDecision } from './approvals';
 import { translateCodexNotification } from './events';
+import { reconstructCodexMessages } from './history';
 import {
   CodexJsonlPeer,
   type ServerNotification,
   type ServerRequest,
 } from './jsonl';
+import { CodexSubagentTracker } from './subagents';
 
 export const MIN_CODEX_VERSION = [0, 144, 4] as const;
 
@@ -160,6 +162,10 @@ export class CodexProcess {
   private readonly pendingServerRequests = new Map<string, PendingServerRequest>();
   private ready = false;
   private shutdownRequested = false;
+  private readonly subagents = new CodexSubagentTracker(
+    undefined,
+    (subagents) => this.onSubagentsChanged?.(subagents),
+  );
   private thread: Record<string, unknown> | null = null;
   private threadId?: string;
   private threadModelProvider = 'openai';
@@ -227,12 +233,16 @@ export class CodexProcess {
     }
 
     this.shutdownRequested = false;
-    const child = spawn(this.executable, ['app-server', '--stdio'], {
+    const child = spawn(
+      this.executable,
+      ['app-server', '--enable', 'multi_agent', '--stdio'],
+      {
       cwd: this.cwd,
       env: process.env,
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
-    });
+      },
+    );
     this.child = child;
     const peer = new CodexJsonlPeer((line) => {
       if (!child.stdin.write(line)) {
@@ -416,6 +426,8 @@ export class CodexProcess {
     }
     this.thread = null;
     this.threadId = undefined;
+    this.subagents.clear();
+    this.subagents.setRootThreadId(undefined);
     this.nextSessionStartSource = 'clear';
   }
 
@@ -515,14 +527,56 @@ export class CodexProcess {
   }
 
   listSubagents(): RuntimeSubagent[] {
-    return [];
+    return this.subagents.list();
   }
 
   async inspectSubagent(id: string): Promise<RuntimeSubagentInspection> {
-    throw new Error(`Subagent not found: ${id}`);
+    const subagent = this.subagents.get(id);
+    if (subagent === undefined) {
+      throw new Error(`Subagent not found: ${id}`);
+    }
+    const response = asRecord(await this.requirePeer().request('thread/read', {
+      includeTurns: true,
+      threadId: id,
+    }));
+    const thread = asRecord(response.thread);
+    const messages = reconstructCodexMessages(thread).flatMap((message) =>
+      message.role === 'user' || message.role === 'assistant'
+        ? [{ content: message.content, role: message.role }]
+        : [],
+    );
+    return { messages, subagent };
   }
 
-  async stopSubagent(_id: string): Promise<void> {}
+  async stopSubagent(id: string): Promise<void> {
+    const subagent = this.subagents.get(id);
+    if (
+      subagent === undefined ||
+      subagent.status === 'completed' ||
+      subagent.status === 'failed' ||
+      subagent.status === 'interrupted' ||
+      subagent.status === 'stopped'
+    ) {
+      return;
+    }
+    const response = asRecord(await this.requirePeer().request('thread/read', {
+      includeTurns: true,
+      threadId: id,
+    }));
+    const thread = asRecord(response.thread);
+    const turns = Array.isArray(thread.turns) ? thread.turns : [];
+    const activeTurn = turns
+      .map(asRecord)
+      .toReversed()
+      .find((turn) => turn.status === 'inProgress' && typeof turn.id === 'string');
+    if (activeTurn !== undefined) {
+      await this.requirePeer().request('turn/interrupt', {
+        threadId: id,
+        turnId: activeTurn.id,
+      });
+    }
+    this.subagents.markInterrupted(id);
+  }
 
   async deploySubagents(_queries: string[]): Promise<void> {}
 
@@ -586,6 +640,20 @@ export class CodexProcess {
       return;
     }
     const notificationParams = asRecord(notification.params);
+    if (notification.method === 'thread/started') {
+      this.subagents.observeThreadStarted(notificationParams.thread);
+      return;
+    }
+    if (notification.method === 'thread/status/changed') {
+      const statusThreadId = notificationParams.threadId;
+      if (typeof statusThreadId === 'string' && this.subagents.get(statusThreadId) !== undefined) {
+        this.subagents.observeThreadStatus(statusThreadId, notificationParams.status);
+      }
+      return;
+    }
+    if (notification.method === 'item/started' || notification.method === 'item/completed') {
+      this.subagents.observeCollabItem(notificationParams.item);
+    }
     if (
       typeof notificationParams.threadId === 'string' &&
       this.threadId !== undefined &&
@@ -729,7 +797,12 @@ export class CodexProcess {
       throw new Error(`Codex ${method} returned an incompatible response.`);
     }
     this.thread = parsed.output.thread;
+    const previousThreadId = this.threadId;
     this.threadId = parsed.output.thread.id;
+    if (previousThreadId !== this.threadId) {
+      this.subagents.clear();
+    }
+    this.subagents.setRootThreadId(this.threadId);
     if (method === 'thread/start') {
       this.nextSessionStartSource = 'startup';
     }
