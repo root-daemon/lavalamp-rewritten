@@ -1,4 +1,4 @@
-import type { FlueEvent } from '../tui/ipc';
+import type { RuntimeEvent, RuntimeSubagent } from '../runtime/types';
 
 export interface GuiUsage {
   input: number;
@@ -17,7 +17,7 @@ export type GuiEventInput =
   | { type: 'turn.started' }
   | { type: 'text.delta'; delta: string }
   | { type: 'thinking.delta'; delta: string }
-  | { type: 'runtime.event'; event: FlueEvent }
+  | { type: 'runtime.event'; event: RuntimeEvent }
   | {
       type: 'tool.started';
       toolCallId: string;
@@ -47,7 +47,8 @@ export type GuiEventInput =
   | { type: 'question.resolved'; requestId: string }
   | { type: 'turn.completed'; usage: GuiUsage; model?: string; provider?: string }
   | { type: 'turn.failed'; message: string }
-  | { type: 'turn.cancelled' };
+  | { type: 'turn.cancelled' }
+  | { type: 'subagents.updated'; subagents: RuntimeSubagent[] };
 
 export type GuiEvent = GuiEventInput & {
   id: number;
@@ -80,6 +81,7 @@ export interface GuiSnapshot {
   usage: GuiUsage;
   messages: GuiMessageSnapshot[];
   tools: GuiToolSnapshot[];
+  subagents: RuntimeSubagent[];
 }
 
 export interface GuiMessageSnapshot {

@@ -6,6 +6,7 @@ import {
 } from '../tui/sessions';
 import { GuiRuntime } from './runtime';
 import { createGuiHostServer } from './server';
+import type { AgentBackend } from '../runtime/backend';
 
 export interface GuiHostMainOptions {
   serverPath: string;
@@ -15,6 +16,7 @@ export interface GuiHostMainOptions {
   sessionId?: string;
   port?: number;
   token?: string;
+  backend?: AgentBackend;
 }
 
 export async function runGuiHost(options: GuiHostMainOptions): Promise<void> {
@@ -24,6 +26,8 @@ export async function runGuiHost(options: GuiHostMainOptions): Promise<void> {
     serverPath: options.serverPath,
     sessionId: options.sessionId,
     workspace: options.workspace,
+    backend: options.backend,
+    model: options.model,
   });
   await runtime.start({ model: options.model, workspace: options.workspace });
   const server = createGuiHostServer({

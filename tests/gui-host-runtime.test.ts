@@ -3,19 +3,23 @@ import { GuiEventStore } from '../src/gui-host/event-store';
 import { GuiRuntime, type GuiProcess } from '../src/gui-host/runtime';
 import type {
   PermissionDecision,
-  PromptCallbacks,
   PromptImage,
 } from '../src/tui/ipc';
+import type { RuntimeCallbacks } from '../src/runtime/types';
 
 class FakeProcess implements GuiProcess {
-  callbacks?: PromptCallbacks;
+  callbacks?: RuntimeCallbacks;
   onPermissionRequest?: GuiProcess['onPermissionRequest'];
   onQuestionRequest?: GuiProcess['onQuestionRequest'];
   onBashStream?: GuiProcess['onBashStream'];
+  onSubagentsChanged?: GuiProcess['onSubagentsChanged'];
+  onSubagentsComplete?: GuiProcess['onSubagentsComplete'];
   permissionResponses: Array<[string, PermissionDecision, boolean | undefined]> = [];
   questionResponses: Array<[string, Record<string, unknown>]> = [];
   started = false;
   stopped = false;
+  stoppedSubagents: string[] = [];
+  deployedQueries: string[][] = [];
 
   async start(): Promise<void> {
     this.started = true;
@@ -23,7 +27,7 @@ class FakeProcess implements GuiProcess {
 
   prompt(
     _message: string,
-    callbacks: PromptCallbacks,
+    callbacks: RuntimeCallbacks,
     _sessionId?: string,
     _images?: PromptImage[],
   ): string {
@@ -48,6 +52,23 @@ class FakeProcess implements GuiProcess {
   }
 
   cancel(): void {}
+
+  listSubagents() { return []; }
+  async inspectSubagent(id: string) {
+    return {
+      messages: [{ content: 'Done', role: 'assistant' as const }],
+      subagent: {
+        id,
+        name: 'Atlas',
+        task: 'Inspect auth',
+        status: 'completed' as const,
+        startedAt: 1,
+      },
+    };
+  }
+  async stopSubagent(id: string) { this.stoppedSubagents.push(id); }
+  async deploySubagents(queries: string[]) { this.deployedQueries.push(queries); }
+  async clearSubagents() {}
 
   async shutdown(): Promise<void> {
     this.stopped = true;
@@ -79,6 +100,7 @@ describe('GUI runtime adapter', () => {
       type: 'tool',
     });
     process.callbacks?.onResult?.({
+      backend: 'flue',
       model: { id: 'model-a', provider: 'cloudflare' },
       text: 'Done',
       usage: {
@@ -153,5 +175,68 @@ describe('GUI runtime adapter', () => {
     });
     await runtime.shutdown();
     expect(process.stopped).toBe(true);
+  });
+
+  test('normalizes subagent updates and exposes read-only control', async () => {
+    const process = new FakeProcess();
+    const store = new GuiEventStore();
+    const runtime = new GuiRuntime({ process, store });
+    await runtime.start({ workspace: '/repo' });
+
+    process.onSubagentsChanged?.([{
+      id: 'child-1',
+      name: 'Atlas',
+      task: 'Inspect auth',
+      status: 'running',
+      startedAt: 1,
+    }]);
+    expect(store.snapshot().subagents).toEqual([
+      expect.objectContaining({ id: 'child-1', status: 'running' }),
+    ]);
+    expect(await runtime.inspectSubagent('child-1')).toMatchObject({
+      subagent: { id: 'child-1' },
+    });
+    await runtime.stopSubagent('child-1');
+    expect(process.stoppedSubagents).toEqual(['child-1']);
+  });
+
+  test('deploys Flue research markers and feeds the summary back after the turn', async () => {
+    const process = new FakeProcess();
+    const runtime = new GuiRuntime({ process, store: new GuiEventStore() });
+    await runtime.start({ workspace: '/repo' });
+    runtime.submitPrompt('Compare approaches');
+
+    process.callbacks?.onEvent?.({
+      result: JSON.stringify({
+        queries: ['Inspect auth', 'Inspect storage'],
+        type: 'parallel_deploy',
+      }),
+      toolCallId: 'deploy-1',
+      toolName: 'deploy_parallel_subs',
+      type: 'tool',
+    });
+    expect(process.deployedQueries).toEqual([
+      ['Inspect auth', 'Inspect storage'],
+    ]);
+
+    process.onSubagentsComplete?.('Both scans passed.');
+    process.callbacks?.onResult?.({
+      backend: 'flue',
+      model: { id: 'model-a', provider: 'cloudflare' },
+      text: '',
+      usage: {
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: null,
+        input: 0,
+        output: 0,
+        totalTokens: 0,
+      },
+    });
+
+    expect(process.callbacks).toBeDefined();
+    expect(runtime.store.snapshot().messages.at(-1)?.content).toContain(
+      'Both scans passed.',
+    );
   });
 });

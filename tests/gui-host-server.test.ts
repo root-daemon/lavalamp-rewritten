@@ -12,6 +12,7 @@ class FakeRuntime implements GuiHostRuntime {
   permissions: Array<[string, GuiPermissionDecision]> = [];
   questions: Array<[string, Record<string, unknown>]> = [];
   cancelled = false;
+  stoppedSubagents: string[] = [];
 
   submitPrompt(prompt: string, sessionId?: string): string {
     this.prompts.push([prompt, sessionId]);
@@ -29,6 +30,24 @@ class FakeRuntime implements GuiHostRuntime {
 
   cancel(): void {
     this.cancelled = true;
+  }
+
+  async inspectSubagent(id: string) {
+    if (id !== 'child-1') throw new Error(`Subagent not found: ${id}`);
+    return {
+      messages: [{ content: 'No regression found.', role: 'assistant' as const }],
+      subagent: {
+        id,
+        name: 'Atlas',
+        task: 'Inspect auth',
+        status: 'completed' as const,
+        startedAt: 1,
+      },
+    };
+  }
+
+  async stopSubagent(id: string) {
+    this.stoppedSubagents.push(id);
   }
 
   async shutdown(): Promise<void> {}
@@ -188,5 +207,25 @@ describe('GUI host server', () => {
         snapshot: { processing: true },
       },
     });
+  });
+
+  test('inspects and stops subagents through authenticated routes', async () => {
+    const { request, runtime } = fixture();
+
+    const inspection = await request('/v1/subagents/child-1');
+    expect(await inspection.json()).toMatchObject({
+      data: {
+        messages: [{ content: 'No regression found.', role: 'assistant' }],
+        subagent: { id: 'child-1', name: 'Atlas' },
+      },
+    });
+    expect((await request('/v1/subagents/missing')).status).toBe(409);
+
+    const stopped = await request('/v1/subagents/child-1/stop', {
+      body: '{}',
+      method: 'POST',
+    });
+    expect(stopped.status).toBe(200);
+    expect(runtime.stoppedSubagents).toEqual(['child-1']);
   });
 });

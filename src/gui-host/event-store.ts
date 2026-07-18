@@ -17,6 +17,7 @@ export class GuiEventStore {
     terminalOutput: '',
     thinkingText: '',
     tools: [],
+    subagents: [],
     usage: { ...EMPTY_USAGE },
   };
 
@@ -201,6 +202,9 @@ export class GuiEventStore {
         break;
       case 'turn.cancelled':
         this.current = { ...this.current, processing: false };
+        break;
+      case 'subagents.updated':
+        this.current = { ...this.current, subagents: event.subagents };
         break;
       default:
         break;

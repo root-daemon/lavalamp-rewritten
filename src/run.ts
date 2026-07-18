@@ -84,15 +84,22 @@ if (subcommand === 'gui') {
 }
 
 if (subcommand === 'gui-host') {
+  const guiBackend = config.backend;
+  assertBackendSupported(guiBackend);
+  const guiModel = guiBackend === 'codex'
+    ? config.codexModel || undefined
+    : configuredFlueModel;
   await preflightInteractiveAuth({
+    backend: guiBackend,
     config,
     env,
-    model: configuredFlueModel,
+    model: guiModel,
     outputFormat: 'text',
   });
   await runGuiHost({
     agentName: process.env.LAVALAMP_ASK === '1' ? 'explore' : 'build',
-    model: configuredFlueModel,
+    backend: guiBackend,
+    model: guiModel,
     serverPath,
     workspace: workspaceRoot,
   });

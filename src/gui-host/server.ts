@@ -1,5 +1,6 @@
 import type { GuiPermissionDecision } from './contracts';
 import type { GuiMessageSnapshot } from './contracts';
+import type { RuntimeSubagentInspection } from '../runtime/types';
 import type { GuiEventStore } from './event-store';
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -13,6 +14,8 @@ export interface GuiHostRuntime {
     answers: Record<string, unknown>,
   ): void;
   cancel(): void;
+  inspectSubagent(id: string): Promise<RuntimeSubagentInspection>;
+  stopSubagent(id: string): Promise<void>;
   shutdown(): Promise<void>;
 }
 
@@ -208,6 +211,21 @@ export function createGuiHostServer(
         if (url.pathname === '/v1/cancel' && request.method === 'POST') {
           options.runtime.cancel();
           return success({ cancelled: true });
+        }
+
+        const subagentMatch = url.pathname.match(/^\/v1\/subagents\/([^/]+)(\/stop)?$/);
+        if (subagentMatch !== null) {
+          const subagentId = decodeURIComponent(subagentMatch[1] ?? '');
+          if (subagentId.length === 0) {
+            return failure('invalid_subagent_id', 'Subagent ID is required', 400);
+          }
+          if (subagentMatch[2] === undefined && request.method === 'GET') {
+            return success(await options.runtime.inspectSubagent(subagentId));
+          }
+          if (subagentMatch[2] === '/stop' && request.method === 'POST') {
+            await options.runtime.stopSubagent(subagentId);
+            return success({ stopped: true, subagentId });
+          }
         }
 
         if (url.pathname === '/v1/sessions' && request.method === 'GET') {
