@@ -11,10 +11,7 @@ import {
 import type { KeyEvent, CliRenderer } from '@opentui/core';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { FlueProcess } from './ipc';
 import type {
-  FlueEvent,
-  FlueResult,
   PermissionRequestMsg,
   PromptImage,
   QuestionRequestMsg,
@@ -38,8 +35,10 @@ import { discoverSkills } from './discover';
 import {
   nameSession,
   saveSession,
+  saveCodexSession,
   listSessions,
   loadSession,
+  loadCodexSession,
 } from './sessions';
 import {
   stripCwd,
@@ -68,17 +67,28 @@ import { configPath, resolveConfig, updateConfig } from '../config/user-config';
 import { BUILD_MODEL, getModelEntry } from '../config/models';
 import { resolveRuntimeRoute, routeSummary } from '../config/runtime-route';
 import { HELP_COMMANDS, HELP_KEYS } from './slash-data';
-import { createTuiLifetime, formatExitSummary } from './lifecycle';
+import {
+  createTuiLifetime,
+  formatExitSummary,
+  startRuntimeWithTuiCleanup,
+} from './lifecycle';
 import {
   createModelPickerState,
+  loadModelPickerModels,
   moveModelPickerSelection,
   selectedModelId,
+  type ModelPickerEntry,
   type ModelPickerState,
 } from './model-picker';
 import { mountInputStack } from './input-stack';
 import { attachmentsForPrompt, type AttachedImage } from './attachments';
 import { formatTuiError } from './errors';
 import { truncateToolResult } from '../tools/result-budget';
+import { parseBackend, type AgentBackend } from '../runtime/backend';
+import { createRuntimeProcess } from '../runtime/process';
+import type { RuntimeEvent, RuntimeResult } from '../runtime/types';
+import { reconstructCodexMessages } from '../runtime/codex/history';
+import { isCodexLoginRequired } from '../runtime/codex/runtime';
 import { BenchmarkCatalog } from '../benchmarks/catalog';
 import { listCustomBenchmarks } from '../benchmarks/custom';
 import { BenchmarkRunStore } from '../benchmarks/run-store';
@@ -92,8 +102,13 @@ import {
   benchmarkWorkspaceDir,
 } from '../storage/paths';
 import { AnalyticsRecorder, formatAnalyticsRows } from '../analytics';
+import { login as cloudflareLogin } from '../auth/login';
+import { openBrowser } from '../auth/browser';
+import { loginFromTui } from './login';
 
 export interface TuiOptions {
+  backend: AgentBackend;
+  allowModelFallback?: boolean;
   serverPath: string;
   cwd: string;
   agentName?: string;
@@ -170,7 +185,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
     path.join(benchmarkWorkspaceDir(options.cwd), 'runs'),
   );
   const backupHistory: string[] = [];
-  let turnBackupCreated = false;
+  let turnBackupId: string | null = null;
   const attachedImages: AttachedImage[] = [];
   let imageCounter = 0;
 
@@ -197,12 +212,23 @@ export async function startTui(options: TuiOptions): Promise<void> {
 
   let currentSessionId = options.resumeSessionId ?? `session_${Date.now()}`;
   const baseAgentName = options.agentName ?? 'build';
-  const flue = new FlueProcess(
-    options.serverPath,
-    options.cwd,
-    baseAgentName,
-    currentSessionId,
-  );
+  const initialCodexRecord = options.backend === 'codex' && options.resumeSessionId !== undefined
+    ? loadCodexSession(options.resumeSessionId)
+    : null;
+  const initialAgentName = initialCodexRecord?.mode === 'plan'
+    ? 'plan'
+    : initialCodexRecord?.mode === 'ask' ? 'explore' : baseAgentName;
+  state.planMode = initialCodexRecord?.mode === 'plan';
+  let activeBackend = options.backend;
+  let flue = createRuntimeProcess({
+    agentName: initialAgentName,
+    allowModelFallback: options.allowModelFallback,
+    backend: activeBackend,
+    cwd: options.cwd,
+    model: options.model,
+    serverPath: options.serverPath,
+    sessionId: currentSessionId,
+  });
   let analytics = AnalyticsRecorder.create({
     agent: baseAgentName,
     conversationSessionId: currentSessionId,
@@ -278,43 +304,55 @@ export async function startTui(options: TuiOptions): Promise<void> {
     },
   });
 
-  // Wire permission request handling from the server child process
-  flue.onPermissionRequest = (request: PermissionRequestMsg) => {
-    (async () => {
-      const choice = await permissionBoxMgr.show(request);
-      analytics.event(
-        'permission',
-        choice === 'allow' || choice === 'always' ? 'allowed' : 'denied',
-        activeAnalyticsTurn,
-      );
-      if (choice === 'always') {
-        setAutorun(
-          cwd,
-          request.toolName,
-          'allow',
-          autorunPattern(request.args),
+  function wireRuntime(): void {
+    flue.onPermissionRequest = (request: PermissionRequestMsg) => {
+      (async () => {
+        const choice = await permissionBoxMgr.show(request);
+        analytics.event(
+          'permission',
+          choice === 'allow' || choice === 'always' ? 'allowed' : 'denied',
+          activeAnalyticsTurn,
         );
-        flue.sendPermissionResponse(request.requestId, 'allow', true);
-        updateStatus();
-      } else {
-        flue.sendPermissionResponse(
-          request.requestId,
-          choice === 'allow' ? 'allow' : 'deny',
-        );
+        if (choice === 'always') {
+          if (activeBackend === 'flue') {
+            setAutorun(
+              cwd,
+              request.toolName,
+              'allow',
+              autorunPattern(request.args),
+            );
+          }
+          flue.sendPermissionResponse(
+            request.requestId,
+            'allow',
+            request.allowSession !== false,
+          );
+          updateStatus();
+        } else {
+          flue.sendPermissionResponse(
+            request.requestId,
+            choice === 'allow' ? 'allow' : 'deny',
+          );
+        }
+      })().catch(() => {});
+    };
+    flue.onQuestionRequest = (request: QuestionRequestMsg) => {
+      (async () => {
+        const answers = await questionBoxMgr.show(request.questions);
+        flue.sendQuestionResponse(request.requestId, answers);
+      })().catch(() => {});
+    };
+    flue.onBashStream = (chunk: string, stream: 'stdout' | 'stderr') => {
+      if (streamingBashEntry !== null) {
+        toolUiMgr.streamToEntry(streamingBashEntry, chunk, stream);
       }
-    })().catch(() => {});
-  };
-  flue.onQuestionRequest = (request: QuestionRequestMsg) => {
-    (async () => {
-      const answers = await questionBoxMgr.show(request.questions);
-      flue.sendQuestionResponse(request.requestId, answers);
-    })().catch(() => {});
-  };
-  flue.onBashStream = (chunk: string, stream: 'stdout' | 'stderr') => {
-    if (streamingBashEntry !== null) {
-      toolUiMgr.streamToEntry(streamingBashEntry, chunk, stream);
-    }
-  };
+    };
+    flue.onServerRequestResolved = () => {
+      if (permissionBoxMgr.isVisible()) permissionBoxMgr.hide('deny');
+      if (questionBoxMgr.isVisible()) questionBoxMgr.hide({});
+    };
+  }
+  wireRuntime();
   root.flexDirection = 'column';
   root.width = '100%';
   root.height = '100%';
@@ -1026,15 +1064,23 @@ export async function startTui(options: TuiOptions): Promise<void> {
     updateStatus();
 
     try {
-      flue.setAgentName(nextAgentName);
-      await flue.restart();
+      if (activeBackend === 'codex' && flue.switchMode !== undefined) {
+        await flue.switchMode(enabled ? 'plan' : baseAgentName === 'explore' ? 'ask' : 'build');
+      } else {
+        flue.setAgentName(nextAgentName);
+        await flue.restart();
+      }
       state.planMode = enabled;
       contextTransferPending = true;
       applyModeVisuals();
     } catch (error) {
-      flue.setAgentName(previousAgentName);
       try {
-        await flue.restart();
+        if (activeBackend === 'codex' && flue.switchMode !== undefined) {
+          await flue.switchMode(state.planMode ? 'plan' : baseAgentName === 'explore' ? 'ask' : 'build');
+        } else {
+          flue.setAgentName(previousAgentName);
+          await flue.restart();
+        }
       } catch {}
       addInfoLine(
         `  could not switch mode: ${error instanceof Error ? error.message : String(error)}`,
@@ -1274,7 +1320,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
   } | null = null;
   let streamingBashEntry: ToolGroupEntry | null = null;
 
-  function handleEvent(event: FlueEvent) {
+  function handleEvent(event: RuntimeEvent) {
     switch (event.type) {
       case 'text_delta': {
         const delta = event.text ?? event.delta ?? '';
@@ -1570,12 +1616,12 @@ export async function startTui(options: TuiOptions): Promise<void> {
 
   function formatErrorMessage(err: Error): string {
     if (isAuthError(err)) {
-      return 'authentication failed (401). Restart lavalamp to re-authenticate.';
+      return 'authentication failed (401). Run /login to re-authenticate.';
     }
     return formatTuiError(err);
   }
 
-  function printUsage(result: FlueResult) {
+  function printUsage(result: RuntimeResult) {
     const u = result.usage;
     if (u == null) {
       return;
@@ -1585,13 +1631,15 @@ export async function startTui(options: TuiOptions): Promise<void> {
     state.usageTotals.cacheRead += u.cacheRead;
     state.usageTotals.cacheWrite += u.cacheWrite;
     state.usageTotals.totalTokens += u.totalTokens;
-    state.usageTotals.cost += u.cost.total;
+    state.usageTotals.cost += u.cost?.total ?? 0;
     const m =
       result.model != null ? `${result.model.provider}/${result.model.id}` : '';
     const config = resolveConfig();
     const label = config.usageDisplayMode === 'neurons' ? 'neurons' : 'usage';
+    const turnCost = u.cost === null ? '' : ` (${formatCost(u.cost.total)})`;
+    const sessionCost = u.cost === null ? '' : ` (${formatCost(state.usageTotals.cost)})`;
     addInfoLine(
-      `  ${label}: ${formatTokenCount(u.totalTokens)} tok (${formatCost(u.cost.total)}) | session ${formatTokenCount(state.usageTotals.totalTokens)} tok (${formatCost(state.usageTotals.cost)}) | ${m}`,
+      `  ${label}: ${formatTokenCount(u.totalTokens)} tok${turnCost} | session ${formatTokenCount(state.usageTotals.totalTokens)} tok${sessionCost} | ${m}`,
       COLORS.dim,
     );
   }
@@ -1600,19 +1648,18 @@ export async function startTui(options: TuiOptions): Promise<void> {
     name: string,
     args: Record<string, unknown>,
   ): void {
-    if (turnBackupCreated) {
-      return;
-    }
-
     const plan = planMutationBackup(name, args);
     if (plan === null) {
       return;
     }
 
     try {
-      const ts = backupEngine.createBackup(plan.paths);
-      backupHistory.push(ts);
-      turnBackupCreated = true;
+      if (turnBackupId === null) {
+        turnBackupId = backupEngine.createBackup(plan.paths);
+        backupHistory.push(turnBackupId);
+      } else {
+        backupEngine.extendBackup(turnBackupId, plan.paths);
+      }
     } catch {}
   }
 
@@ -1620,9 +1667,11 @@ export async function startTui(options: TuiOptions): Promise<void> {
     activeAnalyticsTurn = analytics.startTurn();
     activeStopReason = undefined;
     state.processing = true;
-    turnBackupCreated = false;
+    turnBackupId = null;
     state.historyIndex = -1;
-    prompt = withModeTag(visiblePrompt(prompt));
+    prompt = activeBackend === 'codex'
+      ? visiblePrompt(prompt)
+      : withModeTag(visiblePrompt(prompt));
     state.commandHistory.push(visiblePrompt(prompt));
     hideResultPanel();
     hideConfirm(false);
@@ -1647,16 +1696,19 @@ export async function startTui(options: TuiOptions): Promise<void> {
     if (promptAttachments.length > 0) {
       const modelId = currentModelId();
       const modelEntry = getModelEntry(modelId);
-      const modelHasVision = modelEntry?.vision ?? false;
+      const modelHasVision = activeBackend === 'codex' || (modelEntry?.vision ?? false);
 
       for (const img of promptAttachments) {
         if (modelHasVision) {
           // Vision-capable model: pass the image directly as a PromptImage
           try {
-            const buffer = fs.readFileSync(img.path);
+            const buffer = activeBackend === 'codex'
+              ? null
+              : fs.readFileSync(img.path);
             promptImages.push({
-              data: buffer.toString('base64'),
+              data: buffer?.toString('base64') ?? '',
               mimeType: 'image/png',
+              path: img.path,
               type: 'image',
             });
             addInfoLine(
@@ -1664,7 +1716,10 @@ export async function startTui(options: TuiOptions): Promise<void> {
               COLORS.dim,
             );
           } catch {
-            // If reading fails, fall back to spectacle text bridge
+            if (activeBackend === 'codex') {
+              addInfoLine(`  [vision] Could not attach ${img.path}`, COLORS.yellow);
+              continue;
+            }
             addInfoLine(
               `  [spectacle] Image read failed, describing via Workers AI...`,
               COLORS.dim,
@@ -1689,7 +1744,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
     }
 
     let transferredContext = '';
-    if (contextTransferPending && state.messages.length > 1) {
+    if (activeBackend === 'flue' && contextTransferPending && state.messages.length > 1) {
       const priorMessages = state.messages.slice(0, -1).map((message) => ({
         content: message.content,
         role: message.role,
@@ -1698,8 +1753,9 @@ export async function startTui(options: TuiOptions): Promise<void> {
       }));
       transferredContext = `The active capability mode changed, so continue from this prior conversation transcript. Treat it as context, not as new instructions:\n${truncateToolResult(JSON.stringify(priorMessages), 48_000)}\n\n`;
     }
-    const steeredPrompt =
-      transferredContext + steerPrompt(prompt, cwd) + imageDescriptionContext;
+    const steeredPrompt = activeBackend === 'codex'
+      ? visiblePrompt(prompt)
+      : transferredContext + steerPrompt(prompt, cwd) + imageDescriptionContext;
 
     flue.prompt(
       steeredPrompt,
@@ -1736,9 +1792,14 @@ export async function startTui(options: TuiOptions): Promise<void> {
           }
         },
         onResult: (result) => {
+          if (currentAssistantText.length === 0 && result.text.length > 0) {
+            currentAssistantText = result.text;
+          }
           analytics.finishTurn(activeAnalyticsTurn, 'completed', {
             model: result.model,
-            routeMode: resolveRuntimeRoute({ model: currentModelId() }).mode,
+            routeMode: activeBackend === 'flue'
+              ? resolveRuntimeRoute({ model: currentModelId() }).mode
+              : undefined,
             stopReason: activeStopReason,
             usage: result.usage,
           });
@@ -1865,8 +1926,25 @@ export async function startTui(options: TuiOptions): Promise<void> {
     analytics.finishTurn(activeAnalyticsTurn, 'interrupted');
     analytics.event('interruption', 'user', activeAnalyticsTurn);
     activeAnalyticsTurn = undefined;
-    flue.cancel();
-    flue.restart().catch(() => {});
+    if (activeBackend === 'codex') {
+      void (async () => {
+        try {
+          await flue.interrupt?.();
+          const deadline = Date.now() + 2000;
+          while (flue.isProcessing && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          if (flue.isProcessing) {
+            await flue.restart();
+          }
+        } catch {
+          await flue.restart().catch(() => {});
+        }
+      })();
+    } else {
+      flue.cancel();
+      flue.restart().catch(() => {});
+    }
     state.processing = false;
     stopSpinner();
     state.steerPending = [];
@@ -1906,9 +1984,6 @@ export async function startTui(options: TuiOptions): Promise<void> {
   let savedSessionOnExit: string | null = null;
 
   function saveSessionSnapshot(): string | null {
-    if (savedSessionOnExit !== null) {
-      return savedSessionOnExit;
-    }
     if (state.processing) {
       if (currentAssistantText || accThinking || accToolCalls.length > 0) {
         state.messages.push({
@@ -1924,12 +1999,23 @@ export async function startTui(options: TuiOptions): Promise<void> {
     }
     if (state.messages.length > 0) {
       const sessionName = nameSession(state.messages);
-      savedSessionOnExit = saveSession(
-        state.messages,
-        sessionName,
-        currentSessionId,
-      );
-      currentSessionId = savedSessionOnExit;
+      savedSessionOnExit = activeBackend === 'codex'
+        ? flue.codexThreadId === undefined
+          ? null
+          : saveCodexSession({
+            version: 2,
+            id: currentSessionId,
+            backend: 'codex',
+            codexThreadId: flue.codexThreadId,
+            cwd,
+            mode: state.planMode ? 'plan' : baseAgentName === 'explore' ? 'ask' : 'build',
+            name: sessionName,
+            savedAt: Date.now(),
+          })
+        : saveSession(state.messages, sessionName, currentSessionId);
+      if (savedSessionOnExit !== null) {
+        currentSessionId = savedSessionOnExit;
+      }
     }
     return savedSessionOnExit;
   }
@@ -1963,6 +2049,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
   let sessionPickerActive = false;
   let sessionPickerSelected = 0;
   let sessionPickerSessions: {
+    backend: AgentBackend;
     id: string;
     name: string;
     savedAt: number;
@@ -1970,6 +2057,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
   }[] = [];
   function showSessionPicker(
     sessions: {
+      backend: AgentBackend;
       id: string;
       name: string;
       savedAt: number;
@@ -1983,12 +2071,79 @@ export async function startTui(options: TuiOptions): Promise<void> {
     renderPicker();
   }
 
-  function resumeSession(index: number) {
+  async function resumeSession(index: number) {
     const chosen = sessionPickerSessions[index];
     if (!chosen) {
       return;
     }
     closeSessionPicker();
+    const codexRecord = chosen.backend === 'codex'
+      ? loadCodexSession(chosen.id)
+      : null;
+    if (chosen.backend !== activeBackend) {
+      saveSessionSnapshot();
+      await flue.shutdown();
+      const config = resolveConfig();
+      const previousBackend = activeBackend;
+      const nextRuntime = createRuntimeProcess({
+        agentName: codexRecord?.mode === 'plan'
+          ? 'plan'
+          : codexRecord?.mode === 'ask'
+            ? 'explore'
+            : state.planMode ? 'plan' : baseAgentName,
+        allowModelFallback: chosen.backend === 'codex',
+        backend: chosen.backend,
+        cwd,
+        model: chosen.backend === 'codex'
+          ? config.codexModel || undefined
+          : config.defaultModel || undefined,
+        serverPath: options.serverPath,
+        sessionId: chosen.id,
+      });
+      try {
+        await nextRuntime.start();
+        flue = nextRuntime;
+        activeBackend = chosen.backend;
+        wireRuntime();
+      } catch (error) {
+        flue = createRuntimeProcess({
+          agentName: state.planMode ? 'plan' : baseAgentName,
+          backend: previousBackend,
+          cwd,
+          model: state.model,
+          serverPath: options.serverPath,
+          sessionId: currentSessionId,
+        });
+        await flue.start();
+        wireRuntime();
+        addInfoLine(`  could not switch backend: ${(error as Error).message}`, COLORS.red);
+        return;
+      }
+    }
+    if (chosen.backend === 'codex' && flue.resumeThread !== undefined) {
+      if (codexRecord !== null) {
+        try {
+          flue.setAgentName(
+            codexRecord.mode === 'plan'
+              ? 'plan'
+              : codexRecord.mode === 'ask' ? 'explore' : 'build',
+          );
+          const thread = await flue.resumeThread(codexRecord.codexThreadId);
+          currentSessionId = chosen.id;
+          state.messages = reconstructCodexMessages(thread);
+          state.planMode = codexRecord.mode === 'plan';
+          contextTransferPending = false;
+          savedSessionOnExit = null;
+          renderAllMessages();
+        } catch (error) {
+          addInfoLine(
+            `  Codex thread could not be resumed; local mapping was preserved: ${(error as Error).message}`,
+            COLORS.red,
+          );
+        }
+      }
+      return;
+    }
     const messages = loadSession(chosen.id);
     if (messages !== null) {
       analytics.finish('completed');
@@ -2014,6 +2169,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
         });
       }
       contextTransferPending = true;
+      savedSessionOnExit = null;
 
       renderAllMessages();
     }
@@ -2036,7 +2192,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
       const nameStr = s.name.slice(0, 36);
       rows.push({
         bold: i === sessionPickerSelected,
-        content: `${marker}${nameStr}  ${s.messageCount} msgs  ${age}`,
+        content: `${marker}[${s.backend}] ${nameStr}  ${s.messageCount} msgs  ${age}`,
         fg: i === sessionPickerSelected ? COLORS.white : COLORS.gray,
       });
     }
@@ -2050,11 +2206,30 @@ export async function startTui(options: TuiOptions): Promise<void> {
     const config = resolveConfig();
     return (
       state.model ??
-      (config.defaultModel.length > 0 ? config.defaultModel : BUILD_MODEL)
+      (activeBackend === 'codex'
+        ? config.codexModel || 'server default'
+        : config.defaultModel.length > 0 ? config.defaultModel : BUILD_MODEL)
     );
   }
 
   async function setModel(modelId: string): Promise<boolean> {
+    if (activeBackend === 'codex') {
+      try {
+        await flue.setModel?.(modelId);
+        updateConfig({ codexModel: modelId });
+        state.model = modelId;
+        showResultPanel('/model', [
+          { content: `  Codex model set: ${modelId}`, fg: COLORS.green },
+        ]);
+        updateStatus();
+        return true;
+      } catch (error) {
+        showResultPanel('/model', [
+          { content: `  ${(error as Error).message}`, fg: COLORS.yellow },
+        ]);
+        return false;
+      }
+    }
     const model = getModelEntry(modelId);
     if (model === undefined) {
       showResultPanel('/model', [
@@ -2083,8 +2258,8 @@ export async function startTui(options: TuiOptions): Promise<void> {
     return true;
   }
 
-  function showModelPicker() {
-    modelPickerState = createModelPickerState(currentModelId());
+  function showModelPicker(models?: ModelPickerEntry[]) {
+    modelPickerState = createModelPickerState(currentModelId(), models);
     modelPickerActive = true;
     renderModelPicker();
   }
@@ -2102,26 +2277,33 @@ export async function startTui(options: TuiOptions): Promise<void> {
     }
     const config = resolveConfig();
     const current = currentModelId();
-    const route = resolveRuntimeRoute({
-      config,
-      env: process.env as Record<string, string | undefined>,
-      model: current,
-    });
-    const currentEntry = route.registryEntry;
     const rows: { content: string; fg?: string; bold?: boolean }[] = [
       { bold: true, content: `  model: ${current}`, fg: COLORS.white },
       {
         content: `  config: ${configPath()}`,
         fg: COLORS.dim,
       },
-      {
+    ];
+    if (activeBackend === 'flue') {
+      const route = resolveRuntimeRoute({
+        config,
+        env: process.env as Record<string, string | undefined>,
+        model: current,
+      });
+      const currentEntry = route.registryEntry;
+      rows.push({
         content: `  route: ${routeSummary(route)}`,
         fg: COLORS.gray,
-      },
-    ];
-    if (currentEntry !== undefined) {
+      });
+      if (currentEntry !== undefined) {
+        rows.push({
+          content: `  ${currentEntry.displayName} · ${Math.round(currentEntry.contextWindow / 1000)}k ctx · ${currentEntry.functionCalling ? 'tools' : 'no tools'} · ${currentEntry.vision ? 'vision' : 'text'}`,
+          fg: COLORS.gray,
+        });
+      }
+    } else {
       rows.push({
-        content: `  ${currentEntry.displayName} · ${Math.round(currentEntry.contextWindow / 1000)}k ctx · ${currentEntry.functionCalling ? 'tools' : 'no tools'} · ${currentEntry.vision ? 'vision' : 'text'}`,
+        content: '  backend: Codex app-server',
         fg: COLORS.gray,
       });
     }
@@ -2142,9 +2324,21 @@ export async function startTui(options: TuiOptions): Promise<void> {
       const isCurrent = model.id === current;
       const marker = selected ? '\u25B6 ' : '  ';
       const currentTag = isCurrent ? ' current' : '';
+      if (activeBackend === 'codex') {
+        const defaultTag = model.isDefault ? ' default' : '';
+        const efforts = model.supportedReasoningEfforts?.join(', ') ||
+          'server reasoning default';
+        rows.push({
+          bold: selected,
+          content: `  ${marker}${model.id} — ${efforts}${defaultTag}${currentTag}`,
+          fg: selected ? accent() : isCurrent ? COLORS.white : COLORS.gray,
+        });
+        continue;
+      }
+      const registryModel = getModelEntry(model.id);
       rows.push({
         bold: selected,
-        content: `  ${marker}${model.id}  ${model.vision ? 'vision' : 'text'} ${model.gatewaySupport ? 'gateway' : 'direct'}${currentTag}`,
+        content: `  ${marker}${model.id}  ${registryModel?.vision ? 'vision' : 'text'} ${registryModel?.gatewaySupport ? 'gateway' : 'direct'}${currentTag}`,
         fg: selected ? accent() : isCurrent ? COLORS.white : COLORS.gray,
       });
     }
@@ -2275,9 +2469,8 @@ export async function startTui(options: TuiOptions): Promise<void> {
         break;
       }
       case '/clear': {
-        const sessionName = nameSession(state.messages);
         if (state.messages.length > 0) {
-          saveSession(state.messages, sessionName, currentSessionId);
+          saveSessionSnapshot();
         }
         for (const child of messagesScroll.getChildren()) {
           if (child.id !== 'lava-lamp-box') {
@@ -2287,6 +2480,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
         lavaLampBox.visible = true;
         state.messages = [];
         currentSessionId = `session_${Date.now()}`;
+        flue.clearThread?.();
         subManager.killAll();
         analytics.finish('completed');
         analytics.close();
@@ -2324,6 +2518,13 @@ export async function startTui(options: TuiOptions): Promise<void> {
         if (count === 0) {
           showResultPanel('/compact', [
             { content: '  nothing to compact', fg: COLORS.dim },
+          ]);
+          break;
+        }
+        if (activeBackend === 'codex') {
+          await flue.compact?.();
+          showResultPanel('/compact', [
+            { content: '  native Codex compaction started', fg: COLORS.green },
           ]);
           break;
         }
@@ -2379,7 +2580,120 @@ export async function startTui(options: TuiOptions): Promise<void> {
           await setModel(arg);
           break;
         }
-        showModelPicker();
+        const models = await loadModelPickerModels(activeBackend, async () =>
+          await flue.listModels?.() ?? [],
+        );
+        showModelPicker(models);
+        break;
+      }
+      case '/backend': {
+        if (arg.length === 0) {
+          showResultPanel('/backend', [
+            { content: `  backend: ${activeBackend}`, fg: COLORS.white },
+            { content: '  usage: /backend flue|codex', fg: COLORS.dim },
+          ]);
+          break;
+        }
+        if (state.processing) {
+          showResultPanel('/backend', [
+            { content: '  cannot change backend while a prompt is running', fg: COLORS.yellow },
+          ]);
+          break;
+        }
+        let nextBackend: AgentBackend;
+        try {
+          nextBackend = parseBackend(arg) ?? activeBackend;
+        } catch (error) {
+          showResultPanel('/backend', [
+            { content: `  ${(error as Error).message}`, fg: COLORS.red },
+          ]);
+          break;
+        }
+        if (nextBackend === activeBackend) {
+          showResultPanel('/backend', [
+            { content: `  already using ${activeBackend}`, fg: COLORS.dim },
+          ]);
+          break;
+        }
+        saveSessionSnapshot();
+        const previousBackend = activeBackend;
+        await flue.shutdown();
+        const config = resolveConfig();
+        const nextModel = nextBackend === 'codex'
+          ? config.codexModel || undefined
+          : config.defaultModel || undefined;
+        const nextRuntime = createRuntimeProcess({
+          agentName: state.planMode ? 'plan' : baseAgentName,
+          allowModelFallback: nextBackend === 'codex',
+          backend: nextBackend,
+          cwd,
+          model: nextModel,
+          serverPath: options.serverPath,
+          sessionId: `session_${Date.now()}`,
+        });
+        try {
+          await nextRuntime.start();
+          flue = nextRuntime;
+          activeBackend = nextBackend;
+          wireRuntime();
+          updateConfig({ backend: nextBackend });
+          currentSessionId = `session_${Date.now()}`;
+          savedSessionOnExit = null;
+          state.messages = [];
+          state.model = nextModel;
+          renderAllMessages();
+          showResultPanel('/backend', [
+            { content: `  backend set to ${nextBackend}; started a clean session`, fg: COLORS.green },
+          ]);
+        } catch (error) {
+          flue = createRuntimeProcess({
+            agentName: state.planMode ? 'plan' : baseAgentName,
+            backend: previousBackend,
+            cwd,
+            model: state.model,
+            serverPath: options.serverPath,
+            sessionId: currentSessionId,
+          });
+          await flue.start();
+          wireRuntime();
+          showResultPanel('/backend', [
+            { content: `  backend switch failed: ${(error as Error).message}`, fg: COLORS.red },
+          ]);
+        }
+        break;
+      }
+      case '/login': {
+        try {
+          await loginFromTui({
+            backend: activeBackend,
+            cloudflareLogin: () =>
+              cloudflareLogin({ allowManualPrompt: false }),
+            onProgress: (event) => {
+              const rows: { content: string; fg?: string }[] = [
+                {
+                  content: `  ${event.message}`,
+                  fg:
+                    event.tone === 'success'
+                      ? COLORS.green
+                      : COLORS.yellow,
+                },
+              ];
+              if (event.detail !== undefined) {
+                rows.push({ content: `  ${event.detail}`, fg: COLORS.link });
+              }
+              showResultPanel('/login', rows);
+            },
+            openBrowser,
+            runtime: flue,
+          });
+        } catch (error) {
+          showResultPanel('/login', [
+            {
+              content: `  ${error instanceof Error ? error.message : String(error)}`,
+              fg: COLORS.red,
+            },
+          ]);
+        }
         break;
       }
       case '/benchmark':
@@ -2771,6 +3085,9 @@ export async function startTui(options: TuiOptions): Promise<void> {
           state.messages.pop();
           removedCount++;
         }
+        if (activeBackend === 'codex') {
+          await flue.undoLastTurn?.();
+        }
         renderAllMessages();
         showResultPanel('/undo', [
           {
@@ -2912,7 +3229,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
         return;
       }
       if (key.name === 'return') {
-        resumeSession(sessionPickerSelected);
+        void resumeSession(sessionPickerSelected);
         key.stopPropagation();
         return;
       }
@@ -2978,13 +3295,35 @@ export async function startTui(options: TuiOptions): Promise<void> {
     );
   });
 
-  await flue.start();
+  await startRuntimeWithTuiCleanup(
+    () => flue.start(),
+    () => renderer.destroy(),
+  );
+  if (activeBackend === 'codex') {
+    if (isCodexLoginRequired(flue.account)) {
+      showResultPanel('/login', [
+        { content: '  Codex authentication required.', fg: COLORS.yellow },
+        { content: '  Run /login to sign in.', fg: COLORS.dim },
+      ]);
+    }
+  }
   updateHeader();
   updatePromptChar();
   updateStatus();
 
   if (options.resumeSession) {
     if (typeof options.resumeSessionId === 'string') {
+      const codexRecord = activeBackend === 'codex'
+        ? loadCodexSession(options.resumeSessionId)
+        : null;
+      if (codexRecord !== null && flue.resumeThread !== undefined) {
+        const thread = await flue.resumeThread(codexRecord.codexThreadId);
+        const messages = reconstructCodexMessages(thread);
+        currentSessionId = options.resumeSessionId;
+        state.messages = messages;
+        state.planMode = codexRecord.mode === 'plan';
+        renderAllMessages();
+      } else {
       const messages = loadSession(options.resumeSessionId);
       if (messages !== null) {
         currentSessionId = options.resumeSessionId;
@@ -3010,6 +3349,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
             fg: COLORS.red,
           },
         ]);
+      }
       }
     } else {
       const sessions = listSessions();

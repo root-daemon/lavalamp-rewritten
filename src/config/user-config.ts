@@ -10,11 +10,14 @@ import {
   configPath as resolveConfigPath,
   configPathCandidates,
 } from '../storage/paths';
+import type { AgentBackend } from '../runtime/backend';
 
 export type ProviderRoute = 'direct' | 'gateway';
 export type UsageDisplayMode = 'usage' | 'neurons';
 
 export interface LavalampConfig {
+  backend?: AgentBackend;
+  codexModel?: string;
   defaultModel?: string;
   gatewayEnabled?: boolean;
   gatewayId?: string;
@@ -23,6 +26,8 @@ export interface LavalampConfig {
 }
 
 export const DEFAULT_CONFIG: Required<LavalampConfig> = {
+  backend: 'flue',
+  codexModel: '',
   defaultModel: '',
   gatewayEnabled: false,
   gatewayId: '',
@@ -41,6 +46,13 @@ function normalizeConfig(raw: unknown): LavalampConfig {
 
   const record = raw as Record<string, unknown>;
   const config: LavalampConfig = {};
+
+  if (record.backend === 'flue' || record.backend === 'codex') {
+    config.backend = record.backend;
+  }
+  if (typeof record.codexModel === 'string') {
+    config.codexModel = record.codexModel;
+  }
 
   if (typeof record.defaultModel === 'string') {
     config.defaultModel = record.defaultModel;
@@ -84,6 +96,8 @@ export function loadConfig(): LavalampConfig {
 export function resolveConfig(): Required<LavalampConfig> {
   const loaded = loadConfig();
   return {
+    backend: loaded.backend ?? DEFAULT_CONFIG.backend,
+    codexModel: loaded.codexModel ?? DEFAULT_CONFIG.codexModel,
     defaultModel: loaded.defaultModel ?? DEFAULT_CONFIG.defaultModel,
     gatewayEnabled: loaded.gatewayEnabled ?? DEFAULT_CONFIG.gatewayEnabled,
     gatewayId: loaded.gatewayId ?? DEFAULT_CONFIG.gatewayId,

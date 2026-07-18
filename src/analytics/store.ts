@@ -193,9 +193,9 @@ export class AnalyticsStore {
         usage?.cacheRead ?? 0,
         usage?.cacheWrite ?? 0,
         usage?.totalTokens ?? 0,
-        usage?.cost.input ?? 0,
-        usage?.cost.output ?? 0,
-        usage?.cost.total ?? 0,
+        usage?.cost?.input ?? 0,
+        usage?.cost?.output ?? 0,
+        usage?.cost?.total ?? 0,
         id,
       );
   }

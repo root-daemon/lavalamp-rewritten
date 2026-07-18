@@ -68,12 +68,16 @@ export class PermissionBoxManager extends BaseBoxManager<
 
     rows.push(
       {
-        content: '    [y] Allow    [n] Deny    [a] Always Allow Exact',
+        content: request.allowSession === false
+          ? '    [y] Allow once    [n] Deny'
+          : '    [y] Allow once    [n] Deny    [a] Allow for session',
         fg: COLORS.warn,
       },
       { content: '', fg: COLORS.dim },
       {
-        content: '    Escape to deny · Auto-deny in 30s',
+        content: request.noTimeout === true
+          ? '    Escape to deny'
+          : '    Escape to deny · Auto-deny in 30s',
         fg: COLORS.dim,
       },
     );
@@ -87,11 +91,13 @@ export class PermissionBoxManager extends BaseBoxManager<
     this.box.visible = true;
 
     this.clearTimer();
-    this.timer = setTimeout(() => {
-      if (this.isVisible()) {
-        this.hide('deny');
-      }
-    }, 30_000);
+    if (request.noTimeout !== true) {
+      this.timer = setTimeout(() => {
+        if (this.isVisible()) {
+          this.hide('deny');
+        }
+      }, 30_000);
+    }
 
     return new Promise<'allow' | 'deny' | 'always'>((resolve) => {
       this.resolver = resolve;

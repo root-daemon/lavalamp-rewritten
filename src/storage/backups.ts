@@ -36,6 +36,29 @@ export class BackupEngine {
     return timestamp;
   }
 
+  extendBackup(timestamp: string, paths: string[]): void {
+    const folder = path.join(this.backupDir, timestamp);
+    const manifestPath = path.join(folder, 'manifest.json');
+    const manifest = this.readManifest(manifestPath);
+    const known = new Set(manifest.files.map((file) => file.path));
+    const filesDir = path.join(folder, 'files');
+    for (const requestedPath of new Set(paths)) {
+      const resolved = this.resolveWorkspacePath(requestedPath);
+      if (resolved === null) continue;
+      const relative = path.relative(this.workspaceRoot, resolved);
+      if (known.has(relative)) continue;
+      const existed = fs.existsSync(resolved);
+      const backedUp = existed && fs.statSync(resolved).isFile();
+      manifest.files.push({ backedUp, existed, path: relative });
+      if (backedUp) {
+        const destination = path.join(filesDir, relative);
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.copyFileSync(resolved, destination);
+      }
+    }
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  }
+
   private createPartialBackup(destFolder: string, paths: string[]): void {
     const manifest: BackupManifest = {
       createdAt: new Date().toISOString(),

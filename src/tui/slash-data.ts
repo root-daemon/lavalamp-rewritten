@@ -2,6 +2,8 @@ export const HELP_COMMANDS: [string, string][] = [
   ['/help', 'Show this help'],
   ['/clear', 'New session'],
   ['/sessions', 'Switch sessions'],
+  ['/backend', 'Show/change agent backend'],
+  ['/login', 'Log in to the active backend'],
   ['/compact', 'Compact context'],
   ['/memory', 'Show project memory'],
   ['/model', 'Show/change model'],

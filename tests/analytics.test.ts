@@ -106,6 +106,28 @@ describe('analytics store', () => {
     second.close();
   });
 
+  test('records token usage when a backend does not report monetary cost', () => {
+    const { dbPath, root } = fixture();
+    const store = new AnalyticsStore(dbPath);
+    const runId = store.createRun({
+      agent: 'build',
+      mode: 'print',
+      workspaceRoot: root,
+    });
+    const turnId = store.startTurn({ runId });
+
+    store.finishTurn(turnId, 'completed', {
+      usage: { ...usage, cost: null },
+    });
+    store.finishRun(runId, 'completed');
+
+    expect(
+      store.report({ range: 'all', scope: 'project', workspaceRoot: root })
+        .overview,
+    ).toMatchObject({ totalCost: 0, totalTokens: 185 });
+    store.close();
+  });
+
   test('recovers stale active records without interrupting current runs', () => {
     const { dbPath, root } = fixture();
     const store = new AnalyticsStore(dbPath);

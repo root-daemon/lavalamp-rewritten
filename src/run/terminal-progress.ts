@@ -78,9 +78,9 @@ export function beginTerminalProgress(): () => void {
 }
 
 export function withTerminalProgress(
-  callbacks: PromptCallbacks,
+  callbacks: RuntimeCallbacks,
   beginProgress: () => () => void = beginTerminalProgress,
-): PromptCallbacks {
+): RuntimeCallbacks {
   const stopProgress = beginProgress();
   return {
     ...callbacks,
@@ -94,4 +94,4 @@ export function withTerminalProgress(
     },
   };
 }
-import type { PromptCallbacks } from '../tui/ipc';
+import type { RuntimeCallbacks } from '../runtime/types';

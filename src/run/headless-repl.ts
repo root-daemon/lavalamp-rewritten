@@ -1,11 +1,5 @@
 import * as readline from 'node:readline';
-import {
-  FlueProcess,
-  type FlueEvent,
-  type FlueResult,
-  type PermissionRequestMsg,
-  type QuestionRequestMsg,
-} from '../tui/ipc';
+import type { PermissionRequestMsg, QuestionRequestMsg } from '../tui/ipc';
 import {
   preflightHeadlessAuth,
   preflightSimpleAuth,
@@ -13,10 +7,17 @@ import {
 } from './auth-preflight';
 import { createSimpleEventStream } from './simple-event-stream';
 import { withTerminalProgress } from './terminal-progress';
-import { AnalyticsRecorder } from '../analytics';
+import type { AgentBackend } from '../runtime/backend';
+import { createRuntimeProcess } from '../runtime/process';
+import type { RuntimeEvent, RuntimeResult } from '../runtime/types';
+import { saveCodexSession } from '../tui/sessions';
 import { resolveRuntimeRoute } from '../config/runtime-route';
+import { isCodexLoginRequired } from '../runtime/codex/runtime';
+import { AnalyticsRecorder } from '../analytics';
 
 export interface ReplOptions {
+  backend: AgentBackend;
+  allowModelFallback?: boolean;
   quiet: boolean;
   outputFormat: 'text' | 'json';
   simpleMode?: boolean;
@@ -26,6 +27,9 @@ export interface ReplOptions {
   env: Record<string, string | undefined>;
   model?: string;
   agentName?: string;
+  sudo?: boolean;
+  sessionId?: string;
+  threadId?: string;
 }
 
 function defaultQuestionAnswers(
@@ -64,6 +68,7 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
   }
 
   const preflightCtx: PreflightContext = {
+    backend: opts.backend,
     config: opts.config,
     env: opts.env,
     model: opts.model,
@@ -81,18 +86,27 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
     mode: simple ? 'simple' : 'repl',
     workspaceRoot: opts.workspaceRoot,
   });
-  const route = resolveRuntimeRoute({
-    config: opts.config,
-    env: opts.env,
-    model: opts.model,
-  });
+  const route =
+    opts.backend === 'flue'
+      ? resolveRuntimeRoute({
+          config: opts.config,
+          env: opts.env,
+          model: opts.model,
+        })
+      : null;
   let analyticsTurn: string | undefined;
 
-  const flue = new FlueProcess(
-    opts.serverPath,
-    opts.workspaceRoot,
-    opts.agentName ?? 'build',
-  );
+  const flue = createRuntimeProcess({
+    agentName: opts.agentName ?? 'build',
+    allowModelFallback: opts.allowModelFallback,
+    autoApprove,
+    backend: opts.backend,
+    cwd: opts.workspaceRoot,
+    model: opts.model,
+    serverPath: opts.serverPath,
+    sudo: opts.sudo,
+  });
+  const sessionId = opts.sessionId ?? `session_${Date.now()}`;
   let flueStarted = false;
   let startupError: Error | null = null;
   let startupPromise: Promise<void> | null = null;
@@ -110,7 +124,14 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
     if (startupPromise === null) {
       startupPromise = flue
         .start()
-        .then(() => {
+        .then(async () => {
+          if (opts.backend === 'codex' && isCodexLoginRequired(flue.account)) {
+            throw new Error('Codex authentication required. Run `lavalamp login --backend codex`.');
+          }
+          if (opts.threadId !== undefined) {
+            await flue.resumeThread?.(opts.threadId);
+            opts.threadId = undefined;
+          }
           flueStarted = true;
         })
         .catch((error: unknown) => {
@@ -220,22 +241,44 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
         resolve();
       };
 
-      const handleResult = (result: FlueResult) => {
+      const handleResult = (result: RuntimeResult) => {
         analytics.finishTurn(analyticsTurn, 'completed', {
           model: result.model,
-          routeMode: route.mode,
+          routeMode: route?.mode,
           stopReason,
           usage: result.usage,
         });
         analyticsTurn = undefined;
+        if (opts.backend === 'codex' && result.threadId !== undefined) {
+          saveCodexSession({
+            version: 2,
+            id: sessionId,
+            backend: 'codex',
+            codexThreadId: result.threadId,
+            cwd: opts.workspaceRoot,
+            mode: opts.agentName === 'explore' ? 'ask' : 'build',
+            name: text.slice(0, 45) || 'Codex Session',
+            savedAt: Date.now(),
+          });
+        }
         if (simple && opts.outputFormat !== 'json') {
           simpleEvents.finish();
         }
         if (opts.outputFormat === 'json') {
           process.stdout.write(
             `${JSON.stringify({
+              backend: opts.backend,
+              cost: result.usage.cost,
               model: result.model,
+              route: opts.backend === 'codex' ? null : resolveRuntimeRoute({
+                config: opts.config,
+                env: opts.env,
+                model: opts.model,
+              }),
+              sessionId: result.sessionId ?? sessionId,
               text: streamed || result.text,
+              ...(result.threadId === undefined ? {} : { threadId: result.threadId }),
+              ...(result.turnId === undefined ? {} : { turnId: result.turnId }),
               usage: result.usage,
             })}\n`,
           );
@@ -253,16 +296,15 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
               result.model !== undefined
                 ? `${result.model.provider}/${result.model.id}`
                 : '';
-            process.stderr.write(
-              `  ${u.totalTokens} tok | $${u.cost.total.toFixed(4)} | ${modelStr}\n`,
-            );
+            const cost = u.cost === null ? '' : ` | $${u.cost.total.toFixed(4)}`;
+            process.stderr.write(`  ${u.totalTokens} tok${cost} | ${modelStr}\n`);
           }
         }
         processing = false;
         resolve();
       };
 
-      const handleEvent = (event: FlueEvent) => {
+      const handleEvent = (event: RuntimeEvent) => {
         if (typeof event.stopReason === 'string') {
           stopReason = event.stopReason;
         }
@@ -325,7 +367,7 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
         onResult: handleResult,
       });
       try {
-        flue.prompt(text, callbacks);
+        flue.prompt(text, callbacks, sessionId);
       } catch (err: unknown) {
         callbacks.onError?.(
           err instanceof Error ? err : new Error(String(err)),
@@ -374,7 +416,11 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
     if (input === '/clear') {
       try {
         await ensureFlueStarted();
-        await flue.restart();
+        if (opts.backend === 'codex') {
+          flue.clearThread?.();
+        } else {
+          await flue.restart();
+        }
         flueStarted = true;
         startupPromise = null;
         startupError = null;

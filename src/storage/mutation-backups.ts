@@ -37,12 +37,13 @@ export function planMutationBackup(
   name: string,
   args: Record<string, unknown>,
 ): MutationBackupPlan | null {
-  if (name === 'write' || name === 'edit') {
+  if (name === 'write' || name === 'edit' || name === 'fileChange') {
     const paths = [
       readStringArg(args, ['file_path', 'path', 'filePath']),
       ...extractHashlinePaths(args.patch),
       ...extractHashlinePaths(args.content),
       ...extractHashlinePaths(args.input),
+      ...extractChangePaths(args.changes),
     ].filter((value): value is string => value !== undefined);
     return paths.length > 0 ? { paths } : null;
   }
@@ -55,7 +56,7 @@ export function planMutationBackup(
     return paths.length > 0 ? { paths } : null;
   }
 
-  if (name === 'bash') {
+  if (name === 'bash' || name === 'commandExecution') {
     const command = readStringArg(args, ['command', 'cmd']) ?? '';
     const classification = classifyShellCommand(command);
     if (classification.kind === 'read') {
@@ -66,4 +67,22 @@ export function planMutationBackup(
   }
 
   return null;
+}
+
+function extractChangePaths(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (typeof entry !== 'object' || entry === null) {
+      return [];
+    }
+    const change = entry as Record<string, unknown>;
+    for (const key of ['path', 'filePath', 'file_path']) {
+      if (typeof change[key] === 'string') {
+        return [change[key] as string];
+      }
+    }
+    return [];
+  });
 }

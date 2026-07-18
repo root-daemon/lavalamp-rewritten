@@ -17,7 +17,7 @@ export interface AnalyticsUsage {
   cacheRead: number;
   cacheWrite: number;
   totalTokens: number;
-  cost: { input: number; output: number; total: number };
+  cost: { input: number; output: number; total: number } | null;
 }
 
 export interface AnalyticsQuery {

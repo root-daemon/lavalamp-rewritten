@@ -1,7 +1,7 @@
-import type { FlueEvent } from '../tui/ipc';
+import type { RuntimeEvent } from '../runtime/types';
 
 export interface SimpleEventStream {
-  handle(event: FlueEvent): void;
+  handle(event: RuntimeEvent): void;
   finish(): void;
 }
 
