@@ -79,6 +79,7 @@ import { mountInputStack } from './input-stack';
 import { attachmentsForPrompt, type AttachedImage } from './attachments';
 import { formatTuiError } from './errors';
 import { truncateToolResult } from '../tools/result-budget';
+import { AnalyticsRecorder, formatAnalyticsRows } from '../analytics';
 
 export interface TuiOptions {
   serverPath: string;
@@ -175,8 +176,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
     },
   };
 
-  let currentSessionId =
-    options.resumeSessionId ?? `session_${Date.now()}`;
+  let currentSessionId = options.resumeSessionId ?? `session_${Date.now()}`;
   const baseAgentName = options.agentName ?? 'build';
   const flue = new FlueProcess(
     options.serverPath,
@@ -184,12 +184,22 @@ export async function startTui(options: TuiOptions): Promise<void> {
     baseAgentName,
     currentSessionId,
   );
+  let analytics = AnalyticsRecorder.create({
+    agent: baseAgentName,
+    conversationSessionId: currentSessionId,
+    mode: 'tui',
+    workspaceRoot: cwd,
+  });
+  let activeAnalyticsTurn: string | undefined;
+  let activeStopReason: string | undefined;
   loadAutorun(cwd);
   const permissionRules = loadRules(cwd);
   const subManager = new SubAgentManager(
     options.serverPath,
     options.cwd,
     options.agentName ?? 'build',
+    analytics,
+    () => activeAnalyticsTurn,
   );
   let contextTransferPending = false;
 
@@ -206,6 +216,12 @@ export async function startTui(options: TuiOptions): Promise<void> {
     ],
     onDestroy: () => {
       saveSessionSnapshot();
+      if (!exiting) {
+        analytics.finishTurn(activeAnalyticsTurn, 'interrupted');
+        activeAnalyticsTurn = undefined;
+        analytics.finish('interrupted');
+      }
+      analytics.close();
       destroyed = true;
       lifetime.markDestroyed();
       if (spinnerTimer) {
@@ -247,6 +263,11 @@ export async function startTui(options: TuiOptions): Promise<void> {
   flue.onPermissionRequest = (request: PermissionRequestMsg) => {
     (async () => {
       const choice = await permissionBoxMgr.show(request);
+      analytics.event(
+        'permission',
+        choice === 'allow' || choice === 'always' ? 'allowed' : 'denied',
+        activeAnalyticsTurn,
+      );
       if (choice === 'always') {
         setAutorun(
           cwd,
@@ -972,7 +993,10 @@ export async function startTui(options: TuiOptions): Promise<void> {
       return;
     }
     if (state.processing) {
-      addInfoLine('  finish or interrupt the current turn before switching modes', COLORS.yellow);
+      addInfoLine(
+        '  finish or interrupt the current turn before switching modes',
+        COLORS.yellow,
+      );
       return;
     }
 
@@ -1308,6 +1332,12 @@ export async function startTui(options: TuiOptions): Promise<void> {
         }
         const name = event.toolName ?? 'unknown';
         const args = event.args ?? {};
+        analytics.toolStarted(
+          activeAnalyticsTurn,
+          event.toolCallId,
+          name,
+          args,
+        );
 
         createMutationBackup(name, args);
 
@@ -1342,6 +1372,13 @@ export async function startTui(options: TuiOptions): Promise<void> {
       }
 
       case 'tool': {
+        analytics.toolFinished(
+          activeAnalyticsTurn,
+          event.toolCallId,
+          event.toolName ?? 'unknown',
+          event.durationMs,
+          Boolean(event.isError),
+        );
         if (event.toolName === 'deploy_parallel_subs') {
           const marker =
             typeof event.result === 'string'
@@ -1417,6 +1454,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
       }
 
       case 'compaction_start': {
+        analytics.event('compaction', 'started', activeAnalyticsTurn);
         addInfoLine('  compacting context...', COLORS.dim);
         requestScroll();
         break;
@@ -1541,6 +1579,8 @@ export async function startTui(options: TuiOptions): Promise<void> {
   }
 
   async function _sendPrompt(prompt: string) {
+    activeAnalyticsTurn = analytics.startTurn();
+    activeStopReason = undefined;
     state.processing = true;
     turnBackupCreated = false;
     state.historyIndex = -1;
@@ -1627,6 +1667,8 @@ export async function startTui(options: TuiOptions): Promise<void> {
       steeredPrompt,
       {
         onError: (err) => {
+          analytics.finishTurn(activeAnalyticsTurn, 'failed');
+          activeAnalyticsTurn = undefined;
           finalizeStream();
           state.processing = false;
           saveSessionSnapshot();
@@ -1644,12 +1686,25 @@ export async function startTui(options: TuiOptions): Promise<void> {
           drainPending();
         },
         onEvent: (event) => {
+          if (typeof event.stopReason === 'string') {
+            activeStopReason = event.stopReason;
+          }
+          if (event.type === 'text_delta' || event.type === 'thinking_delta') {
+            analytics.firstResponse(activeAnalyticsTurn);
+          }
           handleEvent(event);
           if (event.type === 'text_delta') {
             currentAssistantText += event.text ?? event.delta ?? '';
           }
         },
         onResult: (result) => {
+          analytics.finishTurn(activeAnalyticsTurn, 'completed', {
+            model: result.model,
+            routeMode: resolveRuntimeRoute({ model: currentModelId() }).mode,
+            stopReason: activeStopReason,
+            usage: result.usage,
+          });
+          activeAnalyticsTurn = undefined;
           const didStream = streamedAnyText;
           finalizeStream();
           state.processing = false;
@@ -1769,6 +1824,9 @@ export async function startTui(options: TuiOptions): Promise<void> {
   }
 
   function handleInterrupt() {
+    analytics.finishTurn(activeAnalyticsTurn, 'interrupted');
+    analytics.event('interruption', 'user', activeAnalyticsTurn);
+    activeAnalyticsTurn = undefined;
     flue.cancel();
     flue.restart().catch(() => {});
     state.processing = false;
@@ -1843,6 +1901,12 @@ export async function startTui(options: TuiOptions): Promise<void> {
       return;
     }
     exiting = true;
+    if (state.processing) {
+      analytics.finishTurn(activeAnalyticsTurn, 'interrupted');
+      analytics.event('interruption', 'exit', activeAnalyticsTurn);
+      activeAnalyticsTurn = undefined;
+    }
+    analytics.finish(state.processing ? 'interrupted' : 'completed');
 
     const savedSessionId = saveSessionSnapshot();
     stopSpinner();
@@ -1889,8 +1953,28 @@ export async function startTui(options: TuiOptions): Promise<void> {
     closeSessionPicker();
     const messages = loadSession(chosen.id);
     if (messages !== null) {
+      analytics.finish('completed');
+      analytics.close();
       currentSessionId = chosen.id;
+      analytics = AnalyticsRecorder.create({
+        agent: baseAgentName,
+        conversationSessionId: currentSessionId,
+        mode: 'tui',
+        workspaceRoot: cwd,
+      });
+      subManager.setAnalytics(analytics, () => activeAnalyticsTurn);
       state.messages = messages;
+      const usage = analytics.conversationUsage(currentSessionId);
+      if (usage !== null) {
+        Object.assign(state.usageTotals, {
+          cacheRead: usage.cacheRead,
+          cacheWrite: usage.cacheWrite,
+          cost: usage.costTotal,
+          input: usage.input,
+          output: usage.output,
+          totalTokens: usage.totalTokens,
+        });
+      }
       contextTransferPending = true;
 
       renderAllMessages();
@@ -2165,6 +2249,24 @@ export async function startTui(options: TuiOptions): Promise<void> {
         lavaLampBox.visible = true;
         state.messages = [];
         currentSessionId = `session_${Date.now()}`;
+        subManager.killAll();
+        analytics.finish('completed');
+        analytics.close();
+        analytics = AnalyticsRecorder.create({
+          agent: baseAgentName,
+          conversationSessionId: currentSessionId,
+          mode: 'tui',
+          workspaceRoot: cwd,
+        });
+        subManager.setAnalytics(analytics, () => activeAnalyticsTurn);
+        Object.assign(state.usageTotals, {
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          input: 0,
+          output: 0,
+          totalTokens: 0,
+        });
         hideResultPanel();
         break;
       }
@@ -2319,6 +2421,52 @@ export async function startTui(options: TuiOptions): Promise<void> {
           {
             content: `  cache read: ${formatTokenCount(total.cacheRead)} · cache write: ${formatTokenCount(total.cacheWrite)}`,
             fg: COLORS.dim,
+          },
+        ]);
+        break;
+      }
+      case '/analytics': {
+        const scope = arg === 'global' ? 'global' : 'project';
+        const range =
+          arg === 'session' ||
+          arg === '7d' ||
+          arg === '30d' ||
+          arg === '90d' ||
+          arg === 'all'
+            ? arg
+            : '30d';
+        const report = analytics.report({
+          range,
+          scope,
+          workspaceRoot: cwd,
+        });
+        showResultPanel(
+          `/analytics ${arg || '30d'}`,
+          report === null
+            ? [{ content: '  analytics unavailable', fg: COLORS.yellow }]
+            : formatAnalyticsRows(report).map((content, index) => ({
+                bold: index === 0 || content.trim() === 'overview',
+                content,
+                fg: content.trim().length === 0 ? COLORS.dim : COLORS.gray,
+              })),
+        );
+        break;
+      }
+      case '/rate': {
+        if (arg !== 'helpful' && arg !== 'unhelpful') {
+          showResultPanel('/rate', [
+            {
+              content: '  usage: /rate helpful|unhelpful',
+              fg: COLORS.yellow,
+            },
+          ]);
+          break;
+        }
+        analytics.rate(arg);
+        showResultPanel('/rate', [
+          {
+            content: `  current run rated ${arg}`,
+            fg: COLORS.gray,
           },
         ]);
         break;
@@ -2536,7 +2684,10 @@ export async function startTui(options: TuiOptions): Promise<void> {
           ]);
         } else {
           showResultPanel('/copy', [
-            { content: '  no supported clipboard command found', fg: COLORS.dim },
+            {
+              content: '  no supported clipboard command found',
+              fg: COLORS.dim,
+            },
           ]);
         }
         break;
@@ -2785,6 +2936,17 @@ export async function startTui(options: TuiOptions): Promise<void> {
       if (messages !== null) {
         currentSessionId = options.resumeSessionId;
         state.messages = messages;
+        const usage = analytics.conversationUsage(currentSessionId);
+        if (usage !== null) {
+          Object.assign(state.usageTotals, {
+            cacheRead: usage.cacheRead,
+            cacheWrite: usage.cacheWrite,
+            cost: usage.costTotal,
+            input: usage.input,
+            output: usage.output,
+            totalTokens: usage.totalTokens,
+          });
+        }
         contextTransferPending = true;
 
         renderAllMessages();
