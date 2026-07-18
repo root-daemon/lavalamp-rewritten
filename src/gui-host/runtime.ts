@@ -5,6 +5,9 @@ import type {
   PermissionDecision,
   PromptImage,
 } from '../tui/ipc';
+import { attachmentsForPrompt, type AttachedImage } from '../tui/attachments';
+import type { TuiLoginProgress } from '../tui/login';
+import { loginFromTui } from '../tui/login';
 import type { AgentBackend } from '../runtime/backend';
 import { createRuntimeProcess } from '../runtime/process';
 import type { RuntimeCallbacks, RuntimeMode, RuntimeModel } from '../runtime/types';
@@ -14,6 +17,8 @@ import { GuiEventStore } from './event-store';
 
 export interface GuiProcess {
   readonly backend?: AgentBackend;
+  readonly account?: unknown;
+  readonly isProcessing: boolean;
   onPermissionRequest?: OnPermissionRequest;
   onQuestionRequest?: OnQuestionRequest;
   onBashStream?: OnBashStream;
@@ -41,6 +46,9 @@ export interface GuiProcess {
   switchMode?(mode: RuntimeMode): Promise<unknown>;
   listModels?(): Promise<RuntimeModel[]>;
   setModel?(model: string): Promise<void>;
+  login?(): Promise<{ authUrl: string; loginId: string }>;
+  readAccount?(): Promise<unknown>;
+  waitForLogin?(loginId: string): Promise<void>;
   shutdown(): Promise<void>;
 }
 
@@ -60,6 +68,8 @@ export class GuiRuntime {
   private sessionId?: string;
   private analytics?: AnalyticsRecorder;
   private activeTurnId?: string;
+  private imageAttachments: AttachedImage[] = [];
+  private imageCounter = 0;
 
   constructor(options: GuiRuntimeOptions & {
     backend?: AgentBackend;
@@ -162,6 +172,14 @@ export class GuiRuntime {
     if (trimmed.length === 0) {
       throw new Error('Prompt is required');
     }
+    const promptAttachments = attachmentsForPrompt(trimmed, this.imageAttachments);
+    this.imageAttachments = [];
+    const images: PromptImage[] = promptAttachments.map((image) => ({
+      data: '',
+      mimeType: 'image/png',
+      path: image.path,
+      type: 'image',
+    }));
     this.store.append({ content: trimmed, type: 'user.message' });
     return this.process.prompt(trimmed, {
       onError: (error) => {
@@ -244,7 +262,28 @@ export class GuiRuntime {
         this.activeTurnId = this.analytics?.startTurn();
         this.store.append({ type: 'turn.started' });
       },
-    }, sessionId);
+    }, sessionId, images);
+  }
+
+  attachImage(path: string): string {
+    this.imageCounter += 1;
+    const tag = `[Image ${this.imageCounter}]`;
+    this.imageAttachments.push({ path, tag });
+    return tag;
+  }
+
+  async login(options: {
+    cloudflareLogin: () => Promise<unknown>;
+    onProgress: (event: TuiLoginProgress) => void;
+    openBrowser: (url: string) => Promise<boolean>;
+  }): Promise<void> {
+    await loginFromTui({
+      backend: this.backend,
+      cloudflareLogin: options.cloudflareLogin,
+      onProgress: options.onProgress,
+      openBrowser: options.openBrowser,
+      runtime: this.process,
+    });
   }
 
   async setMode(mode: RuntimeMode): Promise<void> {

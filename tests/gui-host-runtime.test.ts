@@ -9,6 +9,8 @@ import type { RuntimeCallbacks } from '../src/runtime/types';
 
 class FakeProcess implements GuiProcess {
   callbacks?: RuntimeCallbacks;
+  images: PromptImage[] | undefined;
+  isProcessing = false;
   onPermissionRequest?: GuiProcess['onPermissionRequest'];
   onQuestionRequest?: GuiProcess['onQuestionRequest'];
   onBashStream?: GuiProcess['onBashStream'];
@@ -25,9 +27,10 @@ class FakeProcess implements GuiProcess {
     _message: string,
     callbacks: RuntimeCallbacks,
     _sessionId?: string,
-    _images?: PromptImage[],
+    images?: PromptImage[],
   ): string {
     this.callbacks = callbacks;
+    this.images = images;
     callbacks.onStarted?.();
     return 'request-1';
   }
@@ -166,6 +169,26 @@ describe('GUI runtime adapter', () => {
     ]);
     expect(store.snapshot().pendingPermission).toBeUndefined();
     expect(store.snapshot().pendingQuestion).toBeUndefined();
+  });
+
+  test('forwards only referenced native image attachments', async () => {
+    const process = new FakeProcess();
+    const store = new GuiEventStore();
+    const runtime = new GuiRuntime({ process, store });
+    await runtime.start({ workspace: '/repo' });
+
+    runtime.attachImage('/repo/.lavalamp/attachments/one.png');
+    const secondTag = runtime.attachImage('/repo/.lavalamp/attachments/two.png');
+    runtime.submitPrompt(`Inspect ${secondTag}`, 'session-1');
+
+    expect(process.images).toEqual([
+      {
+        data: '',
+        mimeType: 'image/png',
+        path: '/repo/.lavalamp/attachments/two.png',
+        type: 'image',
+      },
+    ]);
   });
 
   test('records runtime errors and shuts process down', async () => {

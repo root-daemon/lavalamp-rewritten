@@ -331,6 +331,8 @@ pub const Msg = union(enum) {
     command_compact,
     command_undo,
     command_copy,
+    command_login,
+    command_paste_image,
     mode_build,
     mode_ask,
     mode_plan,
@@ -399,30 +401,32 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             for (model.sessions[0..model.session_count]) |*session| session.selected = false;
         },
         .select_session => |key| selectSession(model, key, fx),
-        .command_help => sendCommand(model, fx, "/help"),
-        .command_sessions => sendCommand(model, fx, "/sessions"),
-        .command_models => sendCommand(model, fx, "/models"),
-        .command_permissions => sendCommand(model, fx, "/permissions"),
-        .command_tools => sendCommand(model, fx, "/tools"),
-        .command_usage => sendCommand(model, fx, "/usage"),
-        .command_clear => sendCommand(model, fx, "/clear"),
-        .command_memory => sendCommand(model, fx, "/memory"),
-        .command_mcp => sendCommand(model, fx, "/mcp"),
-        .command_subagents => sendCommand(model, fx, "/subagents"),
-        .command_gateway => sendCommand(model, fx, "/gateway"),
-        .command_rate => sendCommand(model, fx, "/rate"),
-        .command_workspace => sendCommand(model, fx, "/workspace"),
-        .command_sudo => sendCommand(model, fx, "/sudo"),
-        .command_analytics => sendCommand(model, fx, "/analytics"),
-        .command_benchmarks => sendCommand(model, fx, "/benchmarks"),
-        .command_compact => sendCommand(model, fx, "/compact"),
-        .command_undo => sendCommand(model, fx, "/undo"),
-        .command_copy => sendCommand(model, fx, "/copy"),
-        .mode_build => sendCommand(model, fx, "/build"),
-        .mode_ask => sendCommand(model, fx, "/ask"),
-        .mode_plan => sendCommand(model, fx, "/plan"),
-        .backend_flue => sendCommand(model, fx, "/backend flue"),
-        .backend_codex => sendCommand(model, fx, "/backend codex"),
+        .command_help => sendCommand(model, fx, "/help", false),
+        .command_sessions => sendCommand(model, fx, "/sessions", false),
+        .command_models => sendCommand(model, fx, "/models", false),
+        .command_permissions => sendCommand(model, fx, "/permissions", false),
+        .command_tools => sendCommand(model, fx, "/tools", false),
+        .command_usage => sendCommand(model, fx, "/usage", false),
+        .command_clear => sendCommand(model, fx, "/clear", false),
+        .command_memory => sendCommand(model, fx, "/memory", false),
+        .command_mcp => sendCommand(model, fx, "/mcp", false),
+        .command_subagents => sendCommand(model, fx, "/subagents", false),
+        .command_gateway => sendCommand(model, fx, "/gateway", false),
+        .command_rate => sendCommand(model, fx, "/rate", false),
+        .command_workspace => sendCommand(model, fx, "/workspace", false),
+        .command_sudo => sendCommand(model, fx, "/sudo", false),
+        .command_analytics => sendCommand(model, fx, "/analytics", false),
+        .command_benchmarks => sendCommand(model, fx, "/benchmarks", false),
+        .command_compact => sendCommand(model, fx, "/compact", false),
+        .command_undo => sendCommand(model, fx, "/undo", false),
+        .command_copy => sendCommand(model, fx, "/copy", false),
+        .command_login => sendCommand(model, fx, "/login", false),
+        .command_paste_image => sendCommand(model, fx, "/paste-image", false),
+        .mode_build => sendCommand(model, fx, "/build", false),
+        .mode_ask => sendCommand(model, fx, "/ask", false),
+        .mode_plan => sendCommand(model, fx, "/plan", false),
+        .backend_flue => sendCommand(model, fx, "/backend flue", false),
+        .backend_codex => sendCommand(model, fx, "/backend codex", false),
         .allow_permission => resolvePermission(model, fx, "allow"),
         .always_allow_permission => resolvePermission(model, fx, "always_allow"),
         .deny_permission => resolvePermission(model, fx, "deny"),
@@ -517,7 +521,7 @@ fn sendPrompt(model: *Model, fx: *Effects) void {
     }
     const draft_text = model.draft.text();
     if (std.mem.startsWith(u8, std.mem.trim(u8, draft_text, " \t\r\n"), "/")) {
-        sendCommand(model, fx, draft_text);
+        sendCommand(model, fx, draft_text, true);
         return;
     }
     var url_buffer: [160]u8 = undefined;
@@ -575,7 +579,7 @@ fn sendQuestionAnswer(model: *Model, fx: *Effects) void {
     model.error_len = 0;
 }
 
-fn sendCommand(model: *Model, fx: *Effects, command: []const u8) void {
+fn sendCommand(model: *Model, fx: *Effects, command: []const u8, clear_draft: bool) void {
     var url_buffer: [160]u8 = undefined;
     var auth_buffer: [192]u8 = undefined;
     const headers = [_]std.http.Header{
@@ -591,8 +595,29 @@ fn sendCommand(model: *Model, fx: *Effects, command: []const u8) void {
         .timeout_ms = 10_000,
         .on_response = Effects.responseMsg(.command_response),
     });
-    model.draft.clear();
+    if (clear_draft) model.draft.clear();
     model.error_len = 0;
+}
+
+fn appendDraftText(model: *Model, text: []const u8) void {
+    var buffer: [8192]u8 = undefined;
+    var index: usize = 0;
+    const current = model.draft.text();
+    if (current.len > 0) {
+        const count = @min(current.len, buffer.len);
+        @memcpy(buffer[0..count], current[0..count]);
+        index = count;
+        if (index < buffer.len and !std.ascii.isWhitespace(buffer[index - 1])) {
+            buffer[index] = ' ';
+            index += 1;
+        }
+    }
+    if (index < buffer.len) {
+        const count = @min(text.len, buffer.len - index);
+        @memcpy(buffer[index .. index + count], text[0..count]);
+        index += count;
+    }
+    model.draft.set(buffer[0..index]);
 }
 
 fn buildQuestionAnswerBody(model: *Model) ![]const u8 {
@@ -773,6 +798,7 @@ const SessionEnvelope = struct { ok: bool = false, data: ?SessionData = null };
 const CommandData = struct {
     title: []const u8 = "",
     rows: []const []const u8 = &.{},
+    insertText: ?[]const u8 = null,
 };
 const CommandEnvelope = struct { ok: bool = false, data: ?CommandData = null };
 
@@ -810,6 +836,7 @@ pub fn applyCommandJson(model: *Model, body: []const u8) bool {
     for (data.rows[0..model.command_row_count], 0..) |row, index| {
         model.command_rows[index].set(index + 1, row);
     }
+    if (data.insertText) |text| appendDraftText(model, text);
     return true;
 }
 

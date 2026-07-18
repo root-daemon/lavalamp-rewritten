@@ -118,6 +118,7 @@ export interface GuiToolSnapshot {
 export interface GuiCommandResult {
   title: string;
   rows: string[];
+  insertText?: string;
 }
 
 export interface GuiApiError {

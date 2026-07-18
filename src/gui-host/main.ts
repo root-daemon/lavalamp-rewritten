@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { login as cloudflareLogin } from '../auth/login';
+import { openBrowser } from '../auth/browser';
 import { AnalyticsStore, formatAnalyticsRows } from '../analytics';
 import { BenchmarkCatalog } from '../benchmarks/catalog';
 import { listCustomBenchmarks } from '../benchmarks/custom';
@@ -17,7 +19,7 @@ import type { AgentBackend } from '../runtime/backend';
 import { parseBackend } from '../runtime/backend';
 import { isAllowAll, loadAutorun, setAllowAll } from '../permissions/autorun';
 import { getDefaultRules, loadRules } from '../permissions/rules';
-import { copyTextToClipboard } from '../storage/clipboard';
+import { copyTextToClipboard, pasteImageFromClipboard } from '../storage/clipboard';
 import { benchmarkCacheDir, benchmarkWorkspaceDir } from '../storage/paths';
 import { discoverSkills } from '../tui/discover';
 import { HELP_COMMANDS, HELP_KEYS } from '../tui/slash-data';
@@ -38,6 +40,12 @@ export interface GuiHostMainOptions {
   sessionId?: string;
   port?: number;
   token?: string;
+}
+
+export interface GuiCommandDeps {
+  cloudflareLogin?: () => Promise<unknown>;
+  openBrowser?: (url: string) => Promise<boolean>;
+  pasteImageFromClipboard?: (workspaceRoot: string) => Promise<string | null>;
 }
 
 export async function runGuiHost(options: GuiHostMainOptions): Promise<void> {
@@ -108,6 +116,7 @@ export async function runGuiCommand(
   workspace: string,
   serverPath: string,
   raw: string,
+  deps: GuiCommandDeps = {},
 ): Promise<GuiCommandResult> {
   const command = raw.trim();
   const cmd = command.split(/\s+/)[0]?.toLowerCase() ?? '';
@@ -192,14 +201,27 @@ export async function runGuiCommand(
         ],
       };
     }
-    case '/login':
+    case '/login': {
+      const rows: string[] = [];
+      try {
+        await runtime.login({
+          cloudflareLogin:
+            deps.cloudflareLogin ??
+            (() => cloudflareLogin({ allowManualPrompt: false })),
+          onProgress: (event) => {
+            rows.push(event.message);
+            if (event.detail !== undefined) rows.push(event.detail);
+          },
+          openBrowser: deps.openBrowser ?? openBrowser,
+        });
+      } catch (error) {
+        rows.push(error instanceof Error ? error.message : String(error));
+      }
       return {
         title: '/login',
-        rows: [
-          'GUI host is connected.',
-          'If runtime auth fails, run `lavalamp login` in a terminal.',
-        ],
+        rows: rows.length > 0 ? rows : ['Login complete.'],
       };
+    }
     case '/benchmark':
     case '/benchmarks':
       return readBenchmarkSummary(workspace);
@@ -291,11 +313,23 @@ export async function runGuiCommand(
         title: '/undo',
         rows: ['Last turn removed from GUI session.'],
       };
-    case '/paste-image':
+    case '/paste-image': {
+      const imgPath = await (deps.pasteImageFromClipboard ?? pasteImageFromClipboard)(
+        workspace,
+      );
+      if (imgPath === null || imgPath.length === 0) {
+        return {
+          title: '/paste-image',
+          rows: ['No image found in clipboard.'],
+        };
+      }
+      const tag = runtime.attachImage(imgPath);
       return {
+        insertText: tag,
         title: '/paste-image',
-        rows: ['Image paste is TUI-only in this build.'],
+        rows: [`Attached ${tag}`, imgPath],
       };
+    }
     case '/quit':
       return { title: '/quit', rows: ['Close the Lavalamp window to exit.'] };
     default:

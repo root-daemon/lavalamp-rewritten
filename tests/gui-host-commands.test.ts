@@ -10,6 +10,7 @@ import type { RuntimeCallbacks } from '../src/runtime/types';
 
 class FakeProcess implements GuiProcess {
   readonly backend = 'flue' as const;
+  isProcessing = false;
   restarted = false;
 
   async start(): Promise<void> {}
@@ -110,5 +111,33 @@ describe('GUI host commands', () => {
 
     const subagents = await runGuiCommand(runtime, workspace, '/server.mjs', '/subagents');
     expect(subagents.rows).toEqual(['No subagents.']);
+  });
+
+  test('backs login and paste-image commands with GUI host behavior', async () => {
+    const { runtime, workspace } = fixture();
+    const calls: string[] = [];
+    const login = await runGuiCommand(runtime, workspace, '/server.mjs', '/login', {
+      cloudflareLogin: async () => {
+        calls.push('cloudflare-login');
+      },
+      openBrowser: async () => true,
+    });
+
+    expect(calls).toEqual(['cloudflare-login']);
+    expect(login.rows).toEqual([
+      'Opening Cloudflare login...',
+      'Cloudflare login complete.',
+    ]);
+
+    const pasted = await runGuiCommand(
+      runtime,
+      workspace,
+      '/server.mjs',
+      '/paste-image',
+      { pasteImageFromClipboard: async () => '/tmp/image.png' },
+    );
+
+    expect(pasted.insertText).toBe('[Image 1]');
+    expect(pasted.rows).toEqual(['Attached [Image 1]', '/tmp/image.png']);
   });
 });

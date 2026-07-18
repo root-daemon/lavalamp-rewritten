@@ -235,6 +235,7 @@
                 <button size="sm" variant="ghost" on-press="backend_flue">Flue</button>
                 <button size="sm" variant="ghost" on-press="backend_codex">Codex</button>
               </button-group>
+              <button size="sm" variant="secondary" on-press="command_login">Login / Refresh Auth</button>
             </column>
 
             <column gap="8">
@@ -269,8 +270,9 @@
               </row>
               <row gap="6">
                 <button grow="1" size="sm" variant="ghost" on-press="command_gateway">Gateway</button>
-                <button grow="1" size="sm" variant="ghost" on-press="command_rate">Rate</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_paste_image">Paste Image</button>
               </row>
+              <button size="sm" variant="ghost" on-press="command_rate">Rate Last Run</button>
               <button-group gap="4">
                 <button size="sm" variant="ghost" on-press="command_clear">Clear</button>
                 <button size="sm" variant="ghost" on-press="command_compact">Compact</button>
