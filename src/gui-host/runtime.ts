@@ -9,15 +9,23 @@ import type {
 } from '../tui/ipc';
 import type { AgentBackend } from '../runtime/backend';
 import { createRuntimeProcess } from '../runtime/process';
-import type { RuntimeCallbacks, RuntimeMode, RuntimeModel } from '../runtime/types';
+import type {
+  RuntimeCallbacks,
+  RuntimeMode,
+  RuntimeModel,
+  RuntimeSubagent,
+  RuntimeSubagentInspection,
+} from '../runtime/types';
 import type { GuiPermissionDecision, GuiQuestion } from './contracts';
 import { GuiEventStore } from './event-store';
 
 export interface GuiProcess {
-  readonly backend?: AgentBackend;
+  readonly backend: AgentBackend;
   onPermissionRequest?: OnPermissionRequest;
   onQuestionRequest?: OnQuestionRequest;
   onBashStream?: OnBashStream;
+  onSubagentsChanged?: (subagents: RuntimeSubagent[]) => void;
+  onSubagentsComplete?: (summary: string) => void;
   start(): Promise<void>;
   prompt(
     message: string,
@@ -44,6 +52,11 @@ export interface GuiProcess {
   listModels?(): Promise<RuntimeModel[]>;
   setModel?(model: string): Promise<void>;
   shutdown(): Promise<void>;
+  listSubagents(): RuntimeSubagent[];
+  inspectSubagent(id: string): Promise<RuntimeSubagentInspection>;
+  stopSubagent(id: string): Promise<void>;
+  deploySubagents(queries: string[]): Promise<void>;
+  clearSubagents(): Promise<void>;
 }
 
 export interface GuiRuntimeOptions {
@@ -53,6 +66,9 @@ export interface GuiRuntimeOptions {
 
 export class GuiRuntime {
   private process: GuiProcess;
+  private cancelling = false;
+  private pendingSubagentSummary?: string;
+  private recovering = false;
   readonly store: GuiEventStore;
   private readonly serverPath?: string;
   private readonly workspace?: string;
@@ -154,9 +170,21 @@ export class GuiRuntime {
         this.store.append({ chunk, stream, type: 'terminal.output' });
       };
     }
+    this.process.onSubagentsChanged = (subagents) => {
+      this.store.append({ subagents, type: 'subagents.updated' });
+    };
+    this.process.onSubagentsComplete = (summary) => {
+      this.pendingSubagentSummary = this.pendingSubagentSummary === undefined
+        ? summary
+        : `${this.pendingSubagentSummary}\n\n${summary}`;
+      this.submitPendingSubagentSummary();
+    };
   }
 
   submitPrompt(prompt: string, sessionId?: string): string {
+    if (this.recovering) {
+      throw new Error('Runtime is restarting');
+    }
     if (this.store.snapshot().processing) {
       throw new Error('A turn is already running');
     }
@@ -168,9 +196,17 @@ export class GuiRuntime {
     const images = this.pendingImages.splice(0);
     return this.process.prompt(trimmed, {
       onError: (error) => {
+        if (this.cancelling) {
+          return;
+        }
         this.finishAnalyticsTurn('failed');
         this.store.append({ message: error.message, type: 'turn.failed' });
-        this.scheduleQueuedPrompt();
+        if (this.process.backend === 'flue' && this.pendingSubagentSummary !== undefined) {
+          this.recoverFlue();
+        } else {
+          this.submitPendingSubagentSummary();
+          this.scheduleQueuedPrompt();
+        }
       },
       onEvent: (event) => {
         switch (event.type) {
@@ -217,6 +253,20 @@ export class GuiRuntime {
               toolCallId: event.toolCallId ?? 'unknown',
               type: 'tool.completed',
             });
+            if (event.toolName === 'deploy_parallel_subs') {
+              const queries = parallelDeployQueries(event.result);
+              if (queries.length > 0) {
+                void this.process.deploySubagents(queries).catch((error: unknown) => {
+                  this.store.append({
+                    event: {
+                      message: error instanceof Error ? error.message : String(error),
+                      type: 'error',
+                    },
+                    type: 'runtime.event',
+                  });
+                });
+              }
+            }
             break;
           default:
             this.store.append({ event, type: 'runtime.event' });
@@ -243,6 +293,7 @@ export class GuiRuntime {
             totalTokens: result.usage.totalTokens,
           },
         });
+        this.submitPendingSubagentSummary();
         this.scheduleQueuedPrompt();
       },
       onStarted: () => {
@@ -430,6 +481,12 @@ export class GuiRuntime {
     this.store.undoLastTurn();
   }
 
+  async clear(): Promise<void> {
+    await this.process.clearSubagents();
+    this.pendingSubagentSummary = undefined;
+    this.store.resetConversation();
+  }
+
   async listModels(): Promise<RuntimeModel[]> {
     return (await this.process.listModels?.()) ?? [];
   }
@@ -470,15 +527,80 @@ export class GuiRuntime {
     if (!this.store.snapshot().processing) {
       return;
     }
-    this.process.cancel();
+    this.cancelling = true;
+    try {
+      this.process.cancel();
+    } finally {
+      this.cancelling = false;
+    }
     this.finishAnalyticsTurn('interrupted');
     this.store.append({ type: 'turn.cancelled' });
+    if (this.process.backend === 'flue') {
+      this.recoverFlue();
+    } else {
+      this.submitPendingSubagentSummary();
+    }
+  }
+
+  inspectSubagent(id: string): Promise<RuntimeSubagentInspection> {
+    return this.process.inspectSubagent(id);
+  }
+
+  stopSubagent(id: string): Promise<void> {
+    return this.process.stopSubagent(id);
   }
 
   async shutdown(): Promise<void> {
     if (this.store.snapshot().processing) this.finishAnalyticsTurn('interrupted');
     this.finishAnalyticsRun('completed');
     await this.process.shutdown();
+  }
+
+  private submitSubagentSummary(summary: string): void {
+    this.submitPrompt(
+      `The parallel research has completed. Here are the findings:\n\n${summary}\n\nPlease analyze these results and continue with your task.`,
+    );
+  }
+
+  private submitPendingSubagentSummary(): void {
+    if (this.recovering || this.store.snapshot().processing) {
+      return;
+    }
+    const summary = this.pendingSubagentSummary;
+    this.pendingSubagentSummary = undefined;
+    if (summary !== undefined) {
+      try {
+        this.submitSubagentSummary(summary);
+      } catch (error) {
+        this.pendingSubagentSummary = summary;
+        if (this.process.backend === 'flue') {
+          this.recoverFlue();
+          return;
+        }
+        throw error;
+      }
+    }
+  }
+
+  private recoverFlue(): void {
+    if (this.recovering) {
+      return;
+    }
+    this.recovering = true;
+    void (this.process.restart?.() ?? Promise.resolve()).then(() => {
+      this.recovering = false;
+      this.submitPendingSubagentSummary();
+      this.scheduleQueuedPrompt();
+    }).catch((error: unknown) => {
+      this.recovering = false;
+      this.store.append({
+        event: {
+          message: error instanceof Error ? error.message : String(error),
+          type: 'error',
+        },
+        type: 'runtime.event',
+      });
+    });
   }
 
   private startAnalytics(): void {
@@ -502,6 +624,24 @@ export class GuiRuntime {
     this.analytics = undefined;
     this.analyticsTurn = undefined;
   }
+}
+
+function parallelDeployQueries(result: unknown): string[] {
+  let value = result;
+  if (typeof result === 'string') {
+    try {
+      value = JSON.parse(result) as unknown;
+    } catch {
+      return [];
+    }
+  }
+  if (typeof value !== 'object' || value === null) {
+    return [];
+  }
+  const marker = value as Record<string, unknown>;
+  return marker.type === 'parallel_deploy' && Array.isArray(marker.queries)
+    ? marker.queries.filter((query): query is string => typeof query === 'string')
+    : [];
 }
 
 function normalizeQuestions(questions: unknown[]): GuiQuestion[] {

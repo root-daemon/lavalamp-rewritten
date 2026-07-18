@@ -1,12 +1,54 @@
 import { FlueProcess } from './ipc';
 import type { FlueEvent, FlueResult } from './ipc';
-import type { SubAgent } from './state';
+import type { FlueSubAgent } from './state';
 import type { AnalyticsRecorder } from '../analytics';
+import type {
+  RuntimeSubagent,
+  RuntimeSubagentInspection,
+  RuntimeSubagentStatus,
+} from '../runtime/types';
+
+const FLUE_STATUS: Record<FlueSubAgent['status'], RuntimeSubagentStatus> = {
+  done: 'completed',
+  failed: 'failed',
+  killed: 'stopped',
+  running: 'running',
+  timed_out: 'failed',
+};
+
+export function projectFlueSubagent(subagent: FlueSubAgent): RuntimeSubagent {
+  return {
+    id: subagent.id,
+    name: subagent.id,
+    task: subagent.query,
+    status: FLUE_STATUS[subagent.status],
+    startedAt: subagent.startTime,
+    ...(subagent.result === undefined || subagent.result.length === 0
+      ? {}
+      : { result: subagent.result }),
+    ...(subagent.error === undefined ? {} : { error: subagent.error }),
+  };
+}
+
+export function inspectFlueSubagent(
+  subagent: FlueSubAgent,
+): RuntimeSubagentInspection {
+  const content = subagent.result?.trim() || subagent.error?.trim();
+  return {
+    messages: [
+      { content: subagent.query, role: 'user' },
+      ...(content === undefined
+        ? []
+        : [{ content, role: 'assistant' as const }]),
+    ],
+    subagent: projectFlueSubagent(subagent),
+  };
+}
 
 export class SubAgentManager {
   private readonly subs = new Map<
     string,
-    SubAgent & { process: FlueProcess }
+    FlueSubAgent & { process: FlueProcess }
   >();
   private readonly analyticsTurns = new Map<
     string,
@@ -14,7 +56,7 @@ export class SubAgentManager {
   >();
   private seq = 0;
 
-  onUpdate?: (subs: SubAgent[]) => void;
+  onUpdate?: (subs: FlueSubAgent[]) => void;
   onAllComplete?: (summary: string) => void;
 
   constructor(
@@ -41,7 +83,7 @@ export class SubAgentManager {
         this.cwd,
         this.agentName,
       );
-      const sub: SubAgent & { process: FlueProcess } = {
+      const sub: FlueSubAgent & { process: FlueProcess } = {
         id,
         process,
         query,
@@ -57,7 +99,7 @@ export class SubAgentManager {
 
   kill(id: string): void {
     const sub = this.subs.get(id);
-    if (!sub) {
+    if (sub?.status !== 'running') {
       return;
     }
     sub.process.cancel();
@@ -71,16 +113,29 @@ export class SubAgentManager {
   }
 
   killAll(): void {
-    for (const sub of this.subs.values()) {
+    for (const sub of this.getActive()) {
       this.kill(sub.id);
     }
   }
 
-  getActive(): SubAgent[] {
+  reset(): void {
+    for (const sub of this.subs.values()) {
+      if (sub.status === 'running') {
+        sub.process.cancel();
+        const analytics = this.analyticsTurns.get(sub.id);
+        analytics?.recorder.finishTurn(analytics.turnId, 'interrupted');
+      }
+    }
+    this.analyticsTurns.clear();
+    this.subs.clear();
+    this.emitUpdate();
+  }
+
+  getActive(): FlueSubAgent[] {
     return this.list().filter((sub) => sub.status === 'running');
   }
 
-  list(): SubAgent[] {
+  list(): FlueSubAgent[] {
     return [...this.subs.values()].map(
       ({
         process: _process,
@@ -95,11 +150,15 @@ export class SubAgentManager {
     );
   }
 
+  get(id: string): FlueSubAgent | undefined {
+    return this.list().find((subagent) => subagent.id === id);
+  }
+
   isDeploying(): boolean {
     return this.getActive().length > 0;
   }
 
-  private async run(sub: SubAgent & { process: FlueProcess }): Promise<void> {
+  private async run(sub: FlueSubAgent & { process: FlueProcess }): Promise<void> {
     await sub.process.start();
     sub.pid = sub.process.pid;
     this.emitUpdate();
@@ -172,7 +231,7 @@ export class SubAgentManager {
     });
   }
 
-  private fail(sub: SubAgent & { process: FlueProcess }, error: unknown): void {
+  private fail(sub: FlueSubAgent & { process: FlueProcess }, error: unknown): void {
     if (sub.status !== 'running') {
       return;
     }

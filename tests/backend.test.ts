@@ -3,6 +3,7 @@ import {
   assertBackendSupported,
   resolveBackend,
 } from '../src/runtime/backend.ts';
+import { createRuntimeProcess } from '../src/runtime/process.ts';
 
 describe('backend resolution', () => {
   test('defaults to flue when no source selects a backend', () => {
@@ -33,4 +34,23 @@ describe('backend resolution', () => {
     );
     expect(() => assertBackendSupported('flue', 'win32')).not.toThrow();
   });
+});
+
+describe('runtime subagent contract', () => {
+  test.each(['flue', 'codex'] as const)(
+    '%s exposes backend-neutral subagent operations',
+    (backend) => {
+      const process = createRuntimeProcess({
+        agentName: 'build',
+        backend,
+        cwd: '/repo',
+        serverPath: '/repo/server.mjs',
+      });
+
+      expect(typeof process.listSubagents).toBe('function');
+      expect(typeof process.inspectSubagent).toBe('function');
+      expect(typeof process.stopSubagent).toBe('function');
+      expect(typeof process.deploySubagents).toBe('function');
+    },
+  );
 });

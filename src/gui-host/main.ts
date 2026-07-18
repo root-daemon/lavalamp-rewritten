@@ -121,7 +121,7 @@ async function runGuiCommand(
       };
     case '/clear':
       runtime.cancel();
-      runtime.store.resetConversation();
+      await runtime.clear();
       return { title: '/clear', rows: ['Started a clean GUI session.'] };
     case '/sessions': {
       const sessions = listChatSessions();

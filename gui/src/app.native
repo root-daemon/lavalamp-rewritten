@@ -365,6 +365,41 @@
             <separator />
 
             <column gap="8">
+              <row cross="center">
+                <text grow="1" foreground="text_muted">Subagents</text>
+                <badge variant="secondary">{subagent_count}</badge>
+              </row>
+              <if test="{hasSubagents}">
+                <column gap="4">
+                  <for each="subagentItems" key="key" as="subagent">
+                    <list-item icon="circle-dot" selected="{subagent.selected}" on-press="select_subagent:{subagent.key}" label="Inspect subagent">
+                      <column gap="2" grow="1">
+                        <row gap="6" cross="center">
+                          <text grow="1">{subagent.name}</text>
+                          <badge variant="secondary">{subagent.status}</badge>
+                        </row>
+                        <text wrap="true" foreground="text_muted">{subagent.task}</text>
+                      </column>
+                    </list-item>
+                  </for>
+                </column>
+                <if test="{hasSubagentTranscript}">
+                  <accordion text="Read-only transcript">
+                    <markdown source="{subagentTranscript}" />
+                  </accordion>
+                </if>
+                <if test="{selectedSubagentRunning}">
+                  <button icon="x" variant="secondary" size="sm" on-press="stop_subagent" label="Stop selected subagent">Stop Subagent</button>
+                </if>
+              </if>
+              <else>
+                <text wrap="true" foreground="text_muted">Delegated agents appear here while they work.</text>
+              </else>
+            </column>
+
+            <separator />
+
+            <column gap="8">
               <text foreground="text_muted">Activity</text>
               <if test="{hasTools}">
                 <timeline gap="7" label="Tool activity timeline">

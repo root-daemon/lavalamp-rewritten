@@ -1,5 +1,9 @@
 import type { AgentBackend } from '../runtime/backend';
-import type { RuntimeEvent, RuntimeMode } from '../runtime/types';
+import type {
+  RuntimeEvent,
+  RuntimeMode,
+  RuntimeSubagent,
+} from '../runtime/types';
 
 export interface GuiUsage {
   input: number;
@@ -64,7 +68,8 @@ export type GuiEventInput =
       provider?: string;
     }
   | { type: 'turn.failed'; message: string }
-  | { type: 'turn.cancelled' };
+  | { type: 'turn.cancelled' }
+  | { type: 'subagents.updated'; subagents: RuntimeSubagent[] };
 
 export type GuiEvent = GuiEventInput & {
   id: number;
@@ -107,6 +112,7 @@ export interface GuiSnapshot {
   usage: GuiUsage;
   messages: GuiMessageSnapshot[];
   tools: GuiToolSnapshot[];
+  subagents: RuntimeSubagent[];
 }
 
 export interface GuiMessageSnapshot {

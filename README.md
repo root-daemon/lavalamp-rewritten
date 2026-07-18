@@ -191,6 +191,7 @@ Type these commands directly into the prompt input box:
 * `/benchmarks` - Browse public benchmark data, custom suites, and saved runs.
 * `/workspace` - Change the workspace directory.
 * `/skills` - List or load customized skills from `.agents/skills`.
+* `/subagents [id]` - List subagents or open a child thread in a read-only inspector.
 * `/permissions` - View or update your security rules.
 * `/autorun` - Manage commands allowed to run without prompting.
 * `/sudo` - Toggle allow-everything mode (asks for confirmation first).
@@ -270,7 +271,7 @@ sequenceDiagram
   * The parent process pushes user prompts to the server.
   * The server streams text tokens, reasoning steps, tool statuses, and live tool stdout/stderr (`bash_stream`) back to the TUI.
   * When the server requests a mutating file change or terminal command, it sends a `permission_request` message and pauses. The TUI captures user approval and sends a `permission_response` back to continue execution.
-* **Parallel Research Subagents**: When the `deploy_parallel_subs` tool is triggered, the TUI interceptor handles launching up to 3 separate child processes running parallel research prompts. When complete, their findings are automatically merged and fed back to the parent agent.
+* **Subagents**: Flue keeps its `deploy_parallel_subs` flow with up to 3 research child processes. Codex uses native app-server subagent threads. Both backends appear in the same TUI and native GUI activity views, support read-only transcript inspection, and allow a running child to be stopped. Completed Flue findings are still merged back into the parent agent automatically.
 
 ---
 
