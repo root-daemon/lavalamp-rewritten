@@ -1,20 +1,34 @@
-import type { ModelRegistryEntry } from '../config/models';
 import { listModels } from '../config/models';
+import type { AgentBackend } from '../runtime/backend';
+
+export interface ModelPickerEntry {
+  id: string;
+  isDefault?: boolean;
+  supportedReasoningEfforts?: string[];
+}
 
 export interface ModelPickerState {
-  models: ModelRegistryEntry[];
+  models: ModelPickerEntry[];
   selectedIndex: number;
 }
 
 export function createModelPickerState(
   currentModel: string,
-  models = listModels(),
+  models: ModelPickerEntry[] = listModels(),
 ): ModelPickerState {
-  const selectedIndex = Math.max(
-    0,
-    models.findIndex((model) => model.id === currentModel),
-  );
+  const currentIndex = models.findIndex((model) => model.id === currentModel);
+  const defaultIndex = models.findIndex((model) => model.isDefault === true);
+  const selectedIndex = currentIndex >= 0
+    ? currentIndex
+    : Math.max(0, defaultIndex);
   return { models, selectedIndex };
+}
+
+export async function loadModelPickerModels(
+  backend: AgentBackend,
+  listCodexModels: () => Promise<ModelPickerEntry[]>,
+): Promise<ModelPickerEntry[]> {
+  return backend === 'codex' ? listCodexModels() : listModels();
 }
 
 export function moveModelPickerSelection(

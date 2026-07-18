@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-import { execFile } from 'node:child_process';
 import { login } from '../auth/login';
+import { openBrowser } from '../auth/browser';
 import { loadCredentials, clearCredentials } from '../auth/credentials';
 import { parseBackend, resolveBackend } from '../runtime/backend';
 import { resolveConfig } from '../config/user-config';
@@ -25,21 +25,6 @@ async function withCodex<T>(
   } finally {
     await runtime.shutdown();
   }
-}
-
-async function openBrowser(url: string): Promise<boolean> {
-  const command =
-    process.platform === 'darwin'
-      ? 'open'
-      : process.platform === 'linux'
-        ? 'xdg-open'
-        : undefined;
-  if (command === undefined) {
-    return false;
-  }
-  return new Promise((resolve) => {
-    execFile(command, [url], (error) => resolve(error === null));
-  });
 }
 
 async function codexAuth(command: string): Promise<void> {

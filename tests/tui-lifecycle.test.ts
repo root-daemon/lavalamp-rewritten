@@ -28,4 +28,25 @@ describe('TUI lifecycle', () => {
     expect(summary).toContain('continue:');
     expect(summary).toContain('lavalamp --continue session_123');
   });
+
+  test('destroys the renderer when runtime startup fails', async () => {
+    const lifecycle = await import('../src/tui/lifecycle.ts');
+    const startRuntime = Reflect.get(lifecycle, 'startRuntimeWithTuiCleanup');
+    let destroyed = false;
+
+    expect(typeof startRuntime).toBe('function');
+    if (typeof startRuntime !== 'function') return;
+
+    await expect(
+      startRuntime(
+        async () => {
+          throw new Error('startup failed');
+        },
+        () => {
+          destroyed = true;
+        },
+      ),
+    ).rejects.toThrow('startup failed');
+    expect(destroyed).toBe(true);
+  });
 });

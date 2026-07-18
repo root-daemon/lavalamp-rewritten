@@ -22,6 +22,18 @@ export function createTuiLifetime(): TuiLifetime {
   return { finished, markDestroyed };
 }
 
+export async function startRuntimeWithTuiCleanup(
+  startRuntime: () => Promise<void>,
+  destroyRenderer: () => void,
+): Promise<void> {
+  try {
+    await startRuntime();
+  } catch (error) {
+    destroyRenderer();
+    throw error;
+  }
+}
+
 export function formatExitSummary(sessionId: string): string {
   const reset = '\u001B[0m';
   const accentColor = hexToAnsi(COLORS.accent);

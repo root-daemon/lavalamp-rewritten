@@ -286,7 +286,11 @@ async function tryWranglerToken(): Promise<Credentials | null> {
   return { accountId, apiToken: oauthToken };
 }
 
-export async function login(): Promise<Credentials> {
+export interface LoginOptions {
+  allowManualPrompt?: boolean;
+}
+
+export async function login(options: LoginOptions = {}): Promise<Credentials> {
   const existing = loadCredentials();
   if (existing) {
     const valid = await validateCredentials(existing);
@@ -333,6 +337,12 @@ export async function login(): Promise<Credentials> {
       console.error(`[lavalamp] Saved to ${credentialsPath()}`);
       return creds;
     }
+  }
+
+  if (options.allowManualPrompt === false) {
+    throw new Error(
+      'Automatic Cloudflare login failed. Exit Lavalamp and run `lavalamp login --backend flue` to enter credentials manually.',
+    );
   }
 
   console.error('');

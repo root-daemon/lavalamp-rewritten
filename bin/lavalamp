@@ -19,6 +19,7 @@ USAGE:
   lavalamp --continue            Resume a previous session
   lavalamp --workspace /path     Set workspace directory (default: cwd)
   lavalamp --model MODEL         Override default model
+  lavalamp --backend BACKEND     Select flue or codex
   lavalamp models                List known models
   lavalamp config show           Show persisted config
   lavalamp config set KEY VALUE  Persist model/Gateway config
@@ -37,6 +38,7 @@ OPTIONS:
   -c, --continue                 Resume a previous session
   -w, --workspace PATH           Set workspace directory
   -m, --model MODEL              Override default model
+      --backend BACKEND          Agent backend: flue or codex
       --output-format FORMAT     Output format: text (default) or json
       --quiet                    Suppress status messages in -p mode
   -h, --help                     Show this help
@@ -94,6 +96,7 @@ SIMPLE_MODE=false
 PRINT_PROMPT=""
 WORKSPACE=""
 MODEL=""
+BACKEND=""
 RESUME_SESSION=false
 OUTPUT_FORMAT="text"
 QUIET=false
@@ -167,6 +170,16 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       ;;
+    --backend)
+      shift
+      if [[ $# -gt 0 ]]; then
+        BACKEND="$1"
+        shift
+      else
+        echo "[lavalamp] Error: --backend requires flue or codex" >&2
+        exit 1
+      fi
+      ;;
     --output-format|--format)
       shift
       if [[ $# -gt 0 ]]; then
@@ -212,7 +225,7 @@ if [ "$ASK_MODE" = true ]; then
 fi
 
 if [ "$PRINT_MODE" = true ]; then
-  EXTRA_ARGS=(-p)
+  EXTRA_ARGS=(src/run.ts -p)
   if [ -n "$PRINT_PROMPT" ]; then
     EXTRA_ARGS+=("$PRINT_PROMPT")
   fi
@@ -224,17 +237,15 @@ if [ "$PRINT_MODE" = true ]; then
     EXTRA_ARGS+=(--yes)
   fi
 
-  cd "$REPO_DIR" && PORT=48392 bun src/run.ts "${EXTRA_ARGS[@]}"
 elif [ "$SIMPLE_MODE" = true ]; then
-  EXTRA_ARGS=(--simple --quiet)
+  EXTRA_ARGS=(src/run.ts --simple --quiet)
   EXTRA_ARGS+=(--output-format "$OUTPUT_FORMAT")
   if [ "$AUTO_APPROVE" = true ]; then
     EXTRA_ARGS+=(--yes)
   fi
 
-  cd "$REPO_DIR" && PORT=48392 bun src/run.ts "${EXTRA_ARGS[@]}"
 elif [ "$REPL_MODE" = true ]; then
-  EXTRA_ARGS=(--repl)
+  EXTRA_ARGS=(src/run.ts --repl)
   EXTRA_ARGS+=(--output-format "$OUTPUT_FORMAT")
   if [ "$QUIET" = true ]; then
     EXTRA_ARGS+=(--quiet)
@@ -243,15 +254,18 @@ elif [ "$REPL_MODE" = true ]; then
     EXTRA_ARGS+=(--yes)
   fi
 
-  cd "$REPO_DIR" && PORT=48392 bun src/run.ts "${EXTRA_ARGS[@]}"
 else
-  EXTRA_ARGS=()
+  EXTRA_ARGS=(src/run.ts)
   if [ "$RESUME_SESSION" = true ]; then
     EXTRA_ARGS+=(--continue)
     if [ -n "${SESSION_ID:-}" ]; then
       EXTRA_ARGS+=("$SESSION_ID")
     fi
   fi
-
-  cd "$REPO_DIR" && PORT=48392 bun src/run.ts "${EXTRA_ARGS[@]}"
 fi
+
+if [ -n "$BACKEND" ]; then
+  EXTRA_ARGS+=(--backend "$BACKEND")
+fi
+
+cd "$REPO_DIR" && PORT=48392 bun "${EXTRA_ARGS[@]}"

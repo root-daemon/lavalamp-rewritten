@@ -34,6 +34,9 @@ export interface RuntimeProcess {
   undoLastTurn?(): Promise<unknown>;
   listModels?(): Promise<RuntimeModel[]>;
   setModel?(model: string): Promise<void>;
+  login?(): Promise<{ authUrl: string; loginId: string }>;
+  readAccount?(): Promise<unknown>;
+  waitForLogin?(loginId: string): Promise<void>;
 }
 
 export interface CreateRuntimeProcessOptions {

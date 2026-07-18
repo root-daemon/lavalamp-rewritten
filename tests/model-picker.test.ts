@@ -50,4 +50,35 @@ describe('model picker', () => {
     moveModelPickerSelection(state, 1);
     expect(selectedModelId(state)).toBe(last);
   });
+
+  test('selects the server default from a Codex model catalog', () => {
+    const models = [
+      { id: 'gpt-first', isDefault: false },
+      { id: 'gpt-default', isDefault: true },
+    ];
+
+    const state = createModelPickerState('server default', models);
+
+    expect(selectedModelId(state)).toBe('gpt-default');
+  });
+
+  test('loads Codex models for the interactive picker', async () => {
+    const module = await import('../src/tui/model-picker.ts');
+    const loadModels = Reflect.get(module, 'loadModelPickerModels');
+    const models = [
+      {
+        description: 'Default Codex model',
+        displayName: 'GPT Default',
+        id: 'gpt-default',
+        inputModalities: ['text'],
+        isDefault: true,
+        supportedReasoningEfforts: ['medium', 'high'],
+      },
+    ];
+
+    expect(typeof loadModels).toBe('function');
+    if (typeof loadModels !== 'function') return;
+
+    expect(await loadModels('codex', async () => models)).toEqual(models);
+  });
 });

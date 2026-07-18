@@ -67,11 +67,17 @@ import { configPath, resolveConfig, updateConfig } from '../config/user-config';
 import { BUILD_MODEL, getModelEntry } from '../config/models';
 import { resolveRuntimeRoute, routeSummary } from '../config/runtime-route';
 import { HELP_COMMANDS, HELP_KEYS } from './slash-data';
-import { createTuiLifetime, formatExitSummary } from './lifecycle';
+import {
+  createTuiLifetime,
+  formatExitSummary,
+  startRuntimeWithTuiCleanup,
+} from './lifecycle';
 import {
   createModelPickerState,
+  loadModelPickerModels,
   moveModelPickerSelection,
   selectedModelId,
+  type ModelPickerEntry,
   type ModelPickerState,
 } from './model-picker';
 import { mountInputStack } from './input-stack';
@@ -84,6 +90,9 @@ import type { RuntimeEvent, RuntimeResult } from '../runtime/types';
 import { reconstructCodexMessages } from '../runtime/codex/history';
 import { isCodexLoginRequired } from '../runtime/codex/runtime';
 import { AnalyticsRecorder, formatAnalyticsRows } from '../analytics';
+import { login as cloudflareLogin } from '../auth/login';
+import { openBrowser } from '../auth/browser';
+import { loginFromTui } from './login';
 
 export interface TuiOptions {
   backend: AgentBackend;
@@ -1569,7 +1578,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
 
   function formatErrorMessage(err: Error): string {
     if (isAuthError(err)) {
-      return 'authentication failed (401). Restart lavalamp to re-authenticate.';
+      return 'authentication failed (401). Run /login to re-authenticate.';
     }
     return formatTuiError(err);
   }
@@ -2211,8 +2220,8 @@ export async function startTui(options: TuiOptions): Promise<void> {
     return true;
   }
 
-  function showModelPicker() {
-    modelPickerState = createModelPickerState(currentModelId());
+  function showModelPicker(models?: ModelPickerEntry[]) {
+    modelPickerState = createModelPickerState(currentModelId(), models);
     modelPickerActive = true;
     renderModelPicker();
   }
@@ -2230,26 +2239,33 @@ export async function startTui(options: TuiOptions): Promise<void> {
     }
     const config = resolveConfig();
     const current = currentModelId();
-    const route = resolveRuntimeRoute({
-      config,
-      env: process.env as Record<string, string | undefined>,
-      model: current,
-    });
-    const currentEntry = route.registryEntry;
     const rows: { content: string; fg?: string; bold?: boolean }[] = [
       { bold: true, content: `  model: ${current}`, fg: COLORS.white },
       {
         content: `  config: ${configPath()}`,
         fg: COLORS.dim,
       },
-      {
+    ];
+    if (activeBackend === 'flue') {
+      const route = resolveRuntimeRoute({
+        config,
+        env: process.env as Record<string, string | undefined>,
+        model: current,
+      });
+      const currentEntry = route.registryEntry;
+      rows.push({
         content: `  route: ${routeSummary(route)}`,
         fg: COLORS.gray,
-      },
-    ];
-    if (currentEntry !== undefined) {
+      });
+      if (currentEntry !== undefined) {
+        rows.push({
+          content: `  ${currentEntry.displayName} · ${Math.round(currentEntry.contextWindow / 1000)}k ctx · ${currentEntry.functionCalling ? 'tools' : 'no tools'} · ${currentEntry.vision ? 'vision' : 'text'}`,
+          fg: COLORS.gray,
+        });
+      }
+    } else {
       rows.push({
-        content: `  ${currentEntry.displayName} · ${Math.round(currentEntry.contextWindow / 1000)}k ctx · ${currentEntry.functionCalling ? 'tools' : 'no tools'} · ${currentEntry.vision ? 'vision' : 'text'}`,
+        content: '  backend: Codex app-server',
         fg: COLORS.gray,
       });
     }
@@ -2270,9 +2286,21 @@ export async function startTui(options: TuiOptions): Promise<void> {
       const isCurrent = model.id === current;
       const marker = selected ? '\u25B6 ' : '  ';
       const currentTag = isCurrent ? ' current' : '';
+      if (activeBackend === 'codex') {
+        const defaultTag = model.isDefault ? ' default' : '';
+        const efforts = model.supportedReasoningEfforts?.join(', ') ||
+          'server reasoning default';
+        rows.push({
+          bold: selected,
+          content: `  ${marker}${model.id} — ${efforts}${defaultTag}${currentTag}`,
+          fg: selected ? accent() : isCurrent ? COLORS.white : COLORS.gray,
+        });
+        continue;
+      }
+      const registryModel = getModelEntry(model.id);
       rows.push({
         bold: selected,
-        content: `  ${marker}${model.id}  ${model.vision ? 'vision' : 'text'} ${model.gatewaySupport ? 'gateway' : 'direct'}${currentTag}`,
+        content: `  ${marker}${model.id}  ${registryModel?.vision ? 'vision' : 'text'} ${registryModel?.gatewaySupport ? 'gateway' : 'direct'}${currentTag}`,
         fg: selected ? accent() : isCurrent ? COLORS.white : COLORS.gray,
       });
     }
@@ -2514,15 +2542,10 @@ export async function startTui(options: TuiOptions): Promise<void> {
           await setModel(arg);
           break;
         }
-        if (activeBackend === 'codex') {
-          const models = await flue.listModels?.() ?? [];
-          showResultPanel('/models', models.map((model) => ({
-            content: `  ${model.id}${model.isDefault ? ' (default)' : ''} — ${model.supportedReasoningEfforts.join(', ') || 'server reasoning default'}`,
-            fg: model.id === currentModelId() ? COLORS.green : COLORS.gray,
-          })));
-        } else {
-          showModelPicker();
-        }
+        const models = await loadModelPickerModels(activeBackend, async () =>
+          await flue.listModels?.() ?? [],
+        );
+        showModelPicker(models);
         break;
       }
       case '/backend': {
@@ -2597,6 +2620,40 @@ export async function startTui(options: TuiOptions): Promise<void> {
           wireRuntime();
           showResultPanel('/backend', [
             { content: `  backend switch failed: ${(error as Error).message}`, fg: COLORS.red },
+          ]);
+        }
+        break;
+      }
+      case '/login': {
+        try {
+          await loginFromTui({
+            backend: activeBackend,
+            cloudflareLogin: () =>
+              cloudflareLogin({ allowManualPrompt: false }),
+            onProgress: (event) => {
+              const rows: { content: string; fg?: string }[] = [
+                {
+                  content: `  ${event.message}`,
+                  fg:
+                    event.tone === 'success'
+                      ? COLORS.green
+                      : COLORS.yellow,
+                },
+              ];
+              if (event.detail !== undefined) {
+                rows.push({ content: `  ${event.detail}`, fg: COLORS.link });
+              }
+              showResultPanel('/login', rows);
+            },
+            openBrowser,
+            runtime: flue,
+          });
+        } catch (error) {
+          showResultPanel('/login', [
+            {
+              content: `  ${error instanceof Error ? error.message : String(error)}`,
+              fg: COLORS.red,
+            },
           ]);
         }
         break;
@@ -3185,10 +3242,16 @@ export async function startTui(options: TuiOptions): Promise<void> {
     );
   });
 
-  await flue.start();
+  await startRuntimeWithTuiCleanup(
+    () => flue.start(),
+    () => renderer.destroy(),
+  );
   if (activeBackend === 'codex') {
     if (isCodexLoginRequired(flue.account)) {
-      throw new Error('Codex authentication required. Run `lavalamp login --backend codex`.');
+      showResultPanel('/login', [
+        { content: '  Codex authentication required.', fg: COLORS.yellow },
+        { content: '  Run /login to sign in.', fg: COLORS.dim },
+      ]);
     }
   }
   updateHeader();
