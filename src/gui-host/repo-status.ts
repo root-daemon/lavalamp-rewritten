@@ -1,5 +1,8 @@
 import { spawnSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import type { GuiRepoStatusSnapshot } from './contracts';
+import { workspaceDataDir } from '../storage/paths';
 import { readWorkspaceStatus } from './workspace-status';
 
 const CACHE_MS = 5000;
@@ -108,6 +111,51 @@ export function formatRepoStatusRows(status: GuiRepoStatusSnapshot): string[] {
           return `${branchLabel.padEnd(24)} ${worktree.path}${current}`;
         })),
   ];
+}
+
+export function createRepoWorktree(
+  workspace: string,
+  branch: string,
+  targetPath?: string,
+): { ok: true; path: string; branch: string } | { ok: false; error: string } {
+  const repo = git(workspace, ['rev-parse', '--show-toplevel']);
+  if (!repo.ok) return { error: 'No git repository found.', ok: false };
+
+  const normalizedBranch = branch.trim();
+  if (!isSafeBranchName(normalizedBranch)) {
+    return {
+      error: 'branch must use letters, numbers, slash, dot, underscore, or dash',
+      ok: false,
+    };
+  }
+
+  const path = targetPath === undefined || targetPath.trim().length === 0
+    ? join(workspaceDataDir(workspace), 'worktrees', cleanSegment(normalizedBranch))
+    : resolve(workspace, targetPath.trim());
+
+  mkdirSync(dirname(path), { recursive: true });
+  const result = git(workspace, ['worktree', 'add', '-b', normalizedBranch, path]);
+  if (!result.ok) {
+    return { error: result.error || 'git worktree add failed', ok: false };
+  }
+  return { branch: normalizedBranch, ok: true, path };
+}
+
+function isSafeBranchName(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= 160 &&
+    !value.startsWith('-') &&
+    !value.includes('..') &&
+    !value.includes('@{') &&
+    !value.endsWith('/') &&
+    !value.endsWith('.lock') &&
+    /^[A-Za-z0-9._/-]+$/.test(value)
+  );
+}
+
+function cleanSegment(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'task';
 }
 
 function readRemotes(workspace: string): GuiRepoStatusSnapshot['remotes'] {

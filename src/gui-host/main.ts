@@ -30,7 +30,11 @@ import {
   loadSession,
 } from '../tui/sessions';
 import type { GuiCommandResult } from './contracts';
-import { formatRepoStatusRows, readRepoStatus } from './repo-status';
+import {
+  createRepoWorktree,
+  formatRepoStatusRows,
+  readRepoStatus,
+} from './repo-status';
 import { GuiRuntime } from './runtime';
 import { createGuiHostServer } from './server';
 import { readWorkspaceStatus } from './workspace-status';
@@ -138,6 +142,7 @@ export async function runGuiCommand(
           '',
           'GUI:',
           '/repo          Show repo, branch, remote, worktrees, PR and CI links',
+          '/worktree      Create/list GUI task-lane worktrees',
           '/changes       Show git branch, changed files, and diff stat',
           '/diff [path]   Show working tree diff',
         ],
@@ -303,6 +308,9 @@ export async function runGuiCommand(
       return readWorkspaceSummary(workspace);
     case '/repo':
       return readRepoOverview(workspace);
+    case '/worktree':
+    case '/worktrees':
+      return readOrCreateWorktree(workspace, arg);
     case '/changes':
       return readGitChanges(workspace);
     case '/diff':
@@ -521,6 +529,42 @@ function readWorkspaceSummary(workspace: string): GuiCommandResult {
 
 function readRepoOverview(workspace: string): GuiCommandResult {
   return { title: '/repo', rows: formatRepoStatusRows(readRepoStatus(workspace)) };
+}
+
+function readOrCreateWorktree(workspace: string, arg: string): GuiCommandResult {
+  const parts = arg.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) {
+    const status = readRepoStatus(workspace);
+    const rows = formatRepoStatusRows(status);
+    const worktreeIndex = rows.indexOf('worktrees:');
+    return {
+      title: '/worktree',
+      rows: [
+        'usage: /worktree new <branch> [path]',
+        '',
+        ...(worktreeIndex === -1 ? rows : rows.slice(worktreeIndex)),
+      ],
+    };
+  }
+  if (parts[0] !== 'new' || parts[1] === undefined) {
+    return {
+      title: '/worktree',
+      rows: ['usage: /worktree new <branch> [path]'],
+    };
+  }
+  const result = createRepoWorktree(workspace, parts[1], parts[2]);
+  if (!result.ok) {
+    return { title: '/worktree', rows: [`failed: ${result.error}`] };
+  }
+  return {
+    title: '/worktree',
+    rows: [
+      `created: ${result.branch}`,
+      `path: ${result.path}`,
+      '',
+      ...formatRepoStatusRows(readRepoStatus(workspace)),
+    ],
+  };
 }
 
 function readProjectMemory(workspace: string): GuiCommandResult {

@@ -472,4 +472,43 @@ describe('GUI host commands', () => {
     expect(output).toContain('worktrees:');
     expect(output).toContain('feature/gui');
   });
+
+  test('creates git worktree task lanes through the GUI command path', async () => {
+    const { runtime, workspace } = fixture();
+    spawnSync('git', ['init', '-b', 'main'], { cwd: workspace });
+    writeFileSync(join(workspace, 'tracked.txt'), 'first\n');
+    spawnSync('git', ['add', 'tracked.txt'], { cwd: workspace });
+    spawnSync(
+      'git',
+      [
+        '-c',
+        'commit.gpgSign=false',
+        '-c',
+        'user.name=Test User',
+        '-c',
+        'user.email=test@example.com',
+        'commit',
+        '-m',
+        'initial commit',
+      ],
+      { cwd: workspace },
+    );
+
+    const created = await runGuiCommand(
+      runtime,
+      workspace,
+      '/server.mjs',
+      '/worktree new task/gui-lane',
+    );
+    const output = created.rows.join('\n');
+
+    expect(created.title).toBe('/worktree');
+    expect(output).toContain('created: task/gui-lane');
+    expect(output).toContain('path: ');
+    expect(output).toContain('task/gui-lane');
+    expect(output).toContain('worktrees:');
+
+    const listed = await runGuiCommand(runtime, workspace, '/server.mjs', '/worktree');
+    expect(listed.rows.join('\n')).toContain('task/gui-lane');
+  });
 });

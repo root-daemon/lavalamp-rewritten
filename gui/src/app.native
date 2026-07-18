@@ -348,6 +348,7 @@
                         </column>
                       </accordion>
                     </if>
+                    <button size="sm" variant="secondary" on-press="command_worktree">Task Lanes</button>
                   </column>
                 </if>
                 <else>
@@ -370,8 +371,9 @@
               </row>
               <row gap="6">
                 <button grow="1" size="sm" variant="secondary" on-press="command_repo">Repo</button>
-                <button grow="1" size="sm" variant="ghost" on-press="command_workspace">Workspace</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_worktree">Lanes</button>
               </row>
+              <button grow="1" size="sm" variant="ghost" on-press="command_workspace">Workspace</button>
               <row gap="6">
                 <button grow="1" size="sm" variant="ghost" on-press="command_sessions">Sessions</button>
                 <button grow="1" size="sm" variant="ghost" on-press="command_skills">Skills</button>
