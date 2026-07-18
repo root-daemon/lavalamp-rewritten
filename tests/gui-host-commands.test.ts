@@ -159,6 +159,36 @@ describe('GUI host commands', () => {
     expect(planOff.rows).toEqual(['mode set: build']);
   });
 
+  test('loads saved sessions from the slash command by id or search text', async () => {
+    const { runtime, workspace } = fixture();
+    const sessions = join(root, 'home', 'sessions');
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(
+      join(sessions, 'session-a.json'),
+      JSON.stringify({
+        id: 'session-a',
+        messages: [
+          { content: 'Restore this task', role: 'user' },
+          { content: 'Restored answer', role: 'assistant' },
+        ],
+        name: 'Restore GUI parity',
+        savedAt: Date.now(),
+      }),
+    );
+
+    const loaded = await runGuiCommand(runtime, workspace, '/server.mjs', '/sessions Restore');
+
+    expect(loaded.rows).toEqual([
+      'loaded: session-a',
+      'Restore GUI parity',
+      '2 messages',
+    ]);
+    expect(runtime.store.snapshot().messages).toEqual([
+      { content: 'Restore this task', role: 'user' },
+      { content: 'Restored answer', role: 'assistant' },
+    ]);
+  });
+
   test('supports safe sudo state, explicit enable, rating, and subagent output', async () => {
     const { runtime, workspace } = fixture();
     const sudoStatus = await runGuiCommand(runtime, workspace, '/server.mjs', '/sudo');

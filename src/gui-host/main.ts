@@ -146,15 +146,59 @@ export async function runGuiCommand(
       return { title: '/clear', rows: ['Started a clean GUI session.'] };
     case '/sessions': {
       const sessions = listChatSessions();
+      if (arg.length > 0) {
+        const matches = sessions.filter(
+          (session) =>
+            session.id === arg ||
+            session.id.startsWith(arg) ||
+            session.name.toLowerCase().includes(arg.toLowerCase()),
+        );
+        if (matches.length === 0) {
+          return { title: '/sessions', rows: [`No session matches: ${arg}`] };
+        }
+        if (matches.length > 1) {
+          return {
+            title: '/sessions',
+            rows: [
+              `Multiple sessions match: ${arg}`,
+              ...matches.map(
+                (session) =>
+                  `${session.id}  ${session.name}  ${session.messageCount} messages`,
+              ),
+            ],
+          };
+        }
+        const chosen = matches[0];
+        if (chosen === undefined) {
+          return { title: '/sessions', rows: [`No session matches: ${arg}`] };
+        }
+        const messages = loadSession(chosen.id)
+          ?.filter((message) => message.role !== 'system')
+          .map((message) => ({
+            content: message.content,
+            role: message.role as 'user' | 'assistant',
+          }));
+        if (messages === undefined) {
+          return { title: '/sessions', rows: [`Session could not be loaded: ${chosen.id}`] };
+        }
+        runtime.store.replaceMessages(messages);
+        return {
+          title: '/sessions',
+          rows: [`loaded: ${chosen.id}`, chosen.name, `${messages.length} messages`],
+        };
+      }
       return {
         title: '/sessions',
         rows:
           sessions.length === 0
             ? ['No saved sessions.']
-            : sessions.map(
-                (session) =>
-                  `${session.id}  ${session.name}  ${session.messageCount} messages`,
-              ),
+            : [
+                'usage: /sessions <id-or-search>',
+                ...sessions.map(
+                  (session) =>
+                    `${session.id}  ${session.name}  ${session.messageCount} messages`,
+                ),
+              ],
       };
     }
     case '/compact': {
