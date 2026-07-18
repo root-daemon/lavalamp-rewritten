@@ -113,7 +113,7 @@ export function createGuiHostServer(
 
   return Bun.serve({
     hostname,
-    port: options.port ?? 34_197,
+    port: options.port ?? 0,
     async fetch(request) {
       const url = new URL(request.url);
       if (url.pathname === '/v1/health' && request.method === 'GET') {

@@ -1,6 +1,6 @@
 <column background="background">
   <row grow="1">
-    <panel width="284" padding="0">
+    <panel width="300" padding="0">
       <column grow="1">
         <row height="56" padding="14" gap="10" cross="center" window-drag="true">
           <icon name="circle-dot" size="sm" />
@@ -15,7 +15,7 @@
           <button icon="plus" variant="primary" on-press="new_chat" label="Start New Task">New Task</button>
 
           <row height="28" cross="center">
-            <text grow="1" foreground="text_muted">Tasks</text>
+            <text grow="1" foreground="text_muted">Threads</text>
             <badge variant="secondary">{session_count}</badge>
           </row>
 
@@ -166,6 +166,21 @@
               </column>
             </panel>
           </if>
+
+          <if test="{pending_question}">
+            <panel padding="14">
+              <column gap="8">
+                <row gap="8" cross="center">
+                  <icon name="alert" size="sm" />
+                  <column gap="2" grow="1">
+                    <text>Input Required</text>
+                    <text wrap="true" foreground="text_muted">{questionText}</text>
+                  </column>
+                </row>
+                <text foreground="text_muted">Answer in the composer below.</text>
+              </column>
+            </panel>
+          </if>
         </column>
       </scroll>
 
@@ -176,11 +191,16 @@
             <badge variant="secondary">{backendLabel}</badge>
             <badge variant="secondary">{modeLabel}</badge>
             <spacer grow="1" />
+            <if test="{pending_question}">
+              <button icon="send" variant="primary" size="sm" disabled="{sendDisabled}" on-press="send" label="Send Answer">Answer</button>
+            </if>
+            <else>
             <if test="{processing}">
               <button icon="x" variant="secondary" size="sm" on-press="cancel" label="Stop Current Turn">Stop</button>
             </if>
             <else>
               <button icon="send" variant="primary" size="sm" disabled="{sendDisabled}" on-press="send" label="Send Message">Send</button>
+            </else>
             </else>
           </input-group-actions>
         </input-group>
@@ -190,7 +210,7 @@
 
     <separator />
 
-    <panel width="296" padding="0">
+    <panel width="332" padding="0">
       <column grow="1">
         <row height="56" padding="16" cross="center" window-drag="true">
           <text grow="1">Inspector</text>
@@ -231,6 +251,14 @@
                 <button grow="1" size="sm" variant="ghost" on-press="command_analytics">Analytics</button>
                 <button grow="1" size="sm" variant="ghost" on-press="command_benchmarks">Benchmarks</button>
               </row>
+              <row gap="6">
+                <button grow="1" size="sm" variant="ghost" on-press="command_workspace">Workspace</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_memory">Memory</button>
+              </row>
+              <row gap="6">
+                <button grow="1" size="sm" variant="ghost" on-press="command_mcp">MCP</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_subagents">Subagents</button>
+              </row>
             </column>
 
             <column gap="8">
@@ -239,11 +267,17 @@
                 <button grow="1" size="sm" variant="ghost" on-press="command_usage">Usage</button>
                 <button grow="1" size="sm" variant="ghost" on-press="command_help">Help</button>
               </row>
+              <row gap="6">
+                <button grow="1" size="sm" variant="ghost" on-press="command_gateway">Gateway</button>
+                <button grow="1" size="sm" variant="ghost" on-press="command_rate">Rate</button>
+              </row>
               <button-group gap="4">
+                <button size="sm" variant="ghost" on-press="command_clear">Clear</button>
                 <button size="sm" variant="ghost" on-press="command_compact">Compact</button>
                 <button size="sm" variant="ghost" on-press="command_undo">Undo</button>
                 <button size="sm" variant="ghost" on-press="command_copy">Copy</button>
               </button-group>
+              <button size="sm" variant="ghost" on-press="command_sudo">Sudo Mode</button>
             </column>
 
             <separator />

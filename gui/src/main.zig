@@ -130,7 +130,8 @@ pub const Model = struct {
         "terminal_storage", "terminal_len", "error_storage", "error_len",
         "workspace_storage", "workspace_len", "model_storage", "model_len",
         "provider_storage", "provider_len", "backend_storage", "backend_len", "mode_storage", "mode_len", "permission_id_storage", "permission_id_len",
-        "permission_tool_storage", "permission_tool_len", "messages", "message_count",
+        "permission_tool_storage", "permission_tool_len", "pending_question", "question_id_storage", "question_id_len", "question_text_storage", "question_text_len",
+        "question_body_storage", "messages", "message_count",
         "tools", "tool_count", "sessions", "session_count", "selected_session_key", "command_title_storage", "command_title_len",
         "command_rows", "command_row_count", "total_tokens", "total_cost", "assistantText", "authToken",
         "permissionId", "hasMessages",
@@ -166,6 +167,12 @@ pub const Model = struct {
     permission_id_len: usize = 0,
     permission_tool_storage: [96]u8 = undefined,
     permission_tool_len: usize = 0,
+    pending_question: bool = false,
+    question_id_storage: [128]u8 = undefined,
+    question_id_len: usize = 0,
+    question_text_storage: [1024]u8 = undefined,
+    question_text_len: usize = 0,
+    question_body_storage: [8192]u8 = undefined,
     messages: [max_messages]Message = [_]Message{.{}} ** max_messages,
     message_count: usize = 0,
     tools: [max_tools]Tool = [_]Tool{.{}} ** max_tools,
@@ -224,6 +231,12 @@ pub const Model = struct {
     pub fn permissionTool(self: *const Model) []const u8 {
         return self.permission_tool_storage[0..self.permission_tool_len];
     }
+    fn questionId(self: *const Model) []const u8 {
+        return self.question_id_storage[0..self.question_id_len];
+    }
+    pub fn questionText(self: *const Model) []const u8 {
+        return self.question_text_storage[0..self.question_text_len];
+    }
     pub fn commandTitle(self: *const Model) []const u8 {
         return self.command_title_storage[0..self.command_title_len];
     }
@@ -276,7 +289,8 @@ pub const Model = struct {
         return self.terminal_len > 0;
     }
     pub fn sendDisabled(self: *const Model) bool {
-        return !self.connected or self.processing or self.draft.isEmpty();
+        if (!self.connected or self.draft.isEmpty()) return true;
+        return self.processing and !self.pending_question;
     }
     pub fn connectionLabel(self: *const Model) []const u8 {
         if (!self.connected) return "Connecting";
@@ -304,6 +318,14 @@ pub const Msg = union(enum) {
     command_permissions,
     command_tools,
     command_usage,
+    command_clear,
+    command_memory,
+    command_mcp,
+    command_subagents,
+    command_gateway,
+    command_rate,
+    command_workspace,
+    command_sudo,
     command_analytics,
     command_benchmarks,
     command_compact,
@@ -338,10 +360,19 @@ pub fn initialModel() Model {
     return .{};
 }
 
+fn hostBinary() []const u8 {
+    if (std.c.getenv("LAVALAMP_CLI_BINARY")) |raw| {
+        const value = std.mem.span(raw);
+        if (value.len > 0) return value;
+    }
+    return "lavalamp";
+}
+
 fn initEffects(_: *Model, fx: *Effects) void {
+    const binary = hostBinary();
     fx.spawn(.{
         .key = host_process_key,
-        .argv = &.{ "lavalamp", "gui-host" },
+        .argv = &.{ binary, "gui-host" },
         .max_line_bytes = 16 * 1024,
         .on_line = Effects.lineMsg(.host_line),
         .on_exit = Effects.exitMsg(.host_exit),
@@ -360,6 +391,9 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.thinking_len = 0;
             model.terminal_len = 0;
             model.error_len = 0;
+            model.pending_question = false;
+            model.question_id_len = 0;
+            model.question_text_len = 0;
             model.selected_session_key = 0;
             model.clearCommandResult();
             for (model.sessions[0..model.session_count]) |*session| session.selected = false;
@@ -371,6 +405,14 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .command_permissions => sendCommand(model, fx, "/permissions"),
         .command_tools => sendCommand(model, fx, "/tools"),
         .command_usage => sendCommand(model, fx, "/usage"),
+        .command_clear => sendCommand(model, fx, "/clear"),
+        .command_memory => sendCommand(model, fx, "/memory"),
+        .command_mcp => sendCommand(model, fx, "/mcp"),
+        .command_subagents => sendCommand(model, fx, "/subagents"),
+        .command_gateway => sendCommand(model, fx, "/gateway"),
+        .command_rate => sendCommand(model, fx, "/rate"),
+        .command_workspace => sendCommand(model, fx, "/workspace"),
+        .command_sudo => sendCommand(model, fx, "/sudo"),
         .command_analytics => sendCommand(model, fx, "/analytics"),
         .command_benchmarks => sendCommand(model, fx, "/benchmarks"),
         .command_compact => sendCommand(model, fx, "/compact"),
@@ -387,7 +429,11 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .host_line => |line| handleHostLine(model, line, fx),
         .host_exit => |exit| {
             model.connected = false;
-            if (exit.code != 0) setError(model, "Lavalamp host exited unexpectedly");
+            if (exit.reason == .spawn_failed) {
+                setError(model, "Could not start Lavalamp host. Launch with ./bin/lavalamp gui or set LAVALAMP_CLI_BINARY.");
+            } else if (exit.code != 0) {
+                setError(model, "Lavalamp host exited unexpectedly");
+            }
         },
         .poll_tick => |timer| {
             if (timer.outcome == .fired and model.connected) fetchSnapshot(model, fx);
@@ -465,6 +511,10 @@ fn fetchSnapshot(model: *const Model, fx: *Effects) void {
 
 fn sendPrompt(model: *Model, fx: *Effects) void {
     if (model.sendDisabled()) return;
+    if (model.pending_question) {
+        sendQuestionAnswer(model, fx);
+        return;
+    }
     const draft_text = model.draft.text();
     if (std.mem.startsWith(u8, std.mem.trim(u8, draft_text, " \t\r\n"), "/")) {
         sendCommand(model, fx, draft_text);
@@ -496,6 +546,35 @@ fn sendPrompt(model: *Model, fx: *Effects) void {
     model.error_len = 0;
 }
 
+fn sendQuestionAnswer(model: *Model, fx: *Effects) void {
+    var path_buffer: [256]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buffer, "/v1/questions/{s}", .{model.questionId()}) catch return;
+    var url_buffer: [320]u8 = undefined;
+    var auth_buffer: [192]u8 = undefined;
+    const body = buildQuestionAnswerBody(model) catch {
+        setError(model, "Question answer is too long");
+        return;
+    };
+    const headers = [_]std.http.Header{
+        .{ .name = "authorization", .value = authHeader(model, &auth_buffer) },
+        .{ .name = "content-type", .value = "application/json" },
+    };
+    fx.fetch(.{
+        .key = action_fetch_key,
+        .method = .POST,
+        .url = endpoint(model, &url_buffer, path),
+        .headers = &headers,
+        .body = body,
+        .timeout_ms = 10_000,
+        .on_response = Effects.responseMsg(.action_response),
+    });
+    model.pending_question = false;
+    model.question_id_len = 0;
+    model.question_text_len = 0;
+    model.draft.clear();
+    model.error_len = 0;
+}
+
 fn sendCommand(model: *Model, fx: *Effects, command: []const u8) void {
     var url_buffer: [160]u8 = undefined;
     var auth_buffer: [192]u8 = undefined;
@@ -514,6 +593,51 @@ fn sendCommand(model: *Model, fx: *Effects, command: []const u8) void {
     });
     model.draft.clear();
     model.error_len = 0;
+}
+
+fn buildQuestionAnswerBody(model: *Model) ![]const u8 {
+    var index: usize = 0;
+    try appendBytes(model.question_body_storage[0..], &index, "{\"answers\":{");
+    try appendJsonString(model.question_body_storage[0..], &index, model.questionId());
+    try appendBytes(model.question_body_storage[0..], &index, ":");
+    try appendJsonString(model.question_body_storage[0..], &index, model.draft.text());
+    try appendBytes(model.question_body_storage[0..], &index, "}}");
+    return model.question_body_storage[0..index];
+}
+
+fn appendBytes(buffer: []u8, index: *usize, text: []const u8) !void {
+    if (index.* + text.len > buffer.len) return error.NoSpaceLeft;
+    @memcpy(buffer[index.* .. index.* + text.len], text);
+    index.* += text.len;
+}
+
+fn appendByte(buffer: []u8, index: *usize, byte: u8) !void {
+    if (index.* >= buffer.len) return error.NoSpaceLeft;
+    buffer[index.*] = byte;
+    index.* += 1;
+}
+
+fn appendJsonString(buffer: []u8, index: *usize, text: []const u8) !void {
+    try appendByte(buffer, index, '"');
+    for (text) |byte| {
+        switch (byte) {
+            '"' => try appendBytes(buffer, index, "\\\""),
+            '\\' => try appendBytes(buffer, index, "\\\\"),
+            '\n' => try appendBytes(buffer, index, "\\n"),
+            '\r' => try appendBytes(buffer, index, "\\r"),
+            '\t' => try appendBytes(buffer, index, "\\t"),
+            else => {
+                if (byte < 0x20) {
+                    var escape: [6]u8 = undefined;
+                    const written = std.fmt.bufPrint(&escape, "\\u{X:0>4}", .{byte}) catch return error.NoSpaceLeft;
+                    try appendBytes(buffer, index, written);
+                } else {
+                    try appendByte(buffer, index, byte);
+                }
+            },
+        }
+    }
+    try appendByte(buffer, index, '"');
 }
 
 fn cancelTurn(model: *Model, fx: *Effects) void {
@@ -605,6 +729,16 @@ const ToolPayload = struct {
     durationMs: ?u64 = null,
 };
 const PendingPermissionPayload = struct { requestId: []const u8 = "", toolName: []const u8 = "" };
+const QuestionPayload = struct {
+    id: []const u8 = "",
+    question: []const u8 = "",
+    type: []const u8 = "",
+    options: ?[]const []const u8 = null,
+};
+const PendingQuestionPayload = struct {
+    requestId: []const u8 = "",
+    questions: []const QuestionPayload = &.{},
+};
 const SnapshotPayload = struct {
     cursor: u64 = 0,
     processing: bool = false,
@@ -618,6 +752,7 @@ const SnapshotPayload = struct {
     mode: ?[]const u8 = null,
     @"error": ?[]const u8 = null,
     pendingPermission: ?PendingPermissionPayload = null,
+    pendingQuestion: ?PendingQuestionPayload = null,
     usage: UsagePayload = .{},
     messages: []const MessagePayload = &.{},
     tools: []const ToolPayload = &.{},
@@ -737,6 +872,15 @@ pub fn applySnapshotJson(model: *Model, body: []const u8) bool {
         model.permission_pending = false;
         model.permission_id_len = 0;
         model.permission_tool_len = 0;
+    }
+    if (snapshot.pendingQuestion) |pending| {
+        model.pending_question = pending.questions.len > 0;
+        model.question_id_len = copyText(&model.question_id_storage, if (pending.questions.len > 0) pending.questions[0].id else "");
+        model.question_text_len = copyText(&model.question_text_storage, if (pending.questions.len > 0) pending.questions[0].question else "");
+    } else {
+        model.pending_question = false;
+        model.question_id_len = 0;
+        model.question_text_len = 0;
     }
     return true;
 }

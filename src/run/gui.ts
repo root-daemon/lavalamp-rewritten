@@ -42,6 +42,20 @@ export function guiLaunchPath(repoRoot: string, env: GuiEnvironment): string {
   return pathEntries.join(delimiter);
 }
 
+export function guiLaunchEnvironment(options: {
+  repoRoot: string;
+  workspace: string;
+  env: GuiEnvironment;
+}): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...options.env,
+    LAVALAMP_CLI_BINARY: join(options.repoRoot, 'bin', 'lavalamp'),
+    LAVALAMP_WORKSPACE: options.workspace,
+    PATH: guiLaunchPath(options.repoRoot, options.env),
+  };
+}
+
 export function launchGui(options: {
   repoRoot: string;
   workspace: string;
@@ -58,12 +72,7 @@ export function launchGui(options: {
   const child = spawn(binary, [], {
     cwd: options.workspace,
     detached: process.platform !== 'win32',
-    env: {
-      ...process.env,
-      ...options.env,
-      LAVALAMP_WORKSPACE: options.workspace,
-      PATH: guiLaunchPath(options.repoRoot, options.env),
-    },
+    env: guiLaunchEnvironment(options),
     stdio: 'ignore',
   });
 

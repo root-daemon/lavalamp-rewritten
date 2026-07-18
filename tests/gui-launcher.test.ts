@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { delimiter } from 'node:path';
 import {
   guiBinaryCandidates,
+  guiLaunchEnvironment,
   guiLaunchPath,
   resolveGuiBinary,
 } from '../src/run/gui';
@@ -35,5 +36,16 @@ describe('native GUI launcher', () => {
     const entries = path.split(delimiter);
     expect(entries[0]).toBe('/repo/bin');
     expect(entries).toContain('/custom/bin');
+  });
+
+  test('launcher passes an absolute lavalamp host command to the native app', () => {
+    expect(guiLaunchEnvironment({
+      env: { PATH: '/custom/bin' },
+      repoRoot: '/repo',
+      workspace: '/repo/workspace',
+    })).toMatchObject({
+      LAVALAMP_CLI_BINARY: '/repo/bin/lavalamp',
+      LAVALAMP_WORKSPACE: '/repo/workspace',
+    });
   });
 });

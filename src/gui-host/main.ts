@@ -275,11 +275,10 @@ async function runGuiCommand(
         rows: ['mode set: build'],
       };
     case '/plan': {
-      const nextMode = runtime.store.snapshot().mode === 'plan' ? 'build' : 'plan';
-      await runtime.setMode(nextMode);
+      await runtime.setMode('plan');
       return {
         title: '/plan',
-        rows: [`mode set: ${nextMode}`],
+        rows: ['mode set: plan'],
       };
     }
     case '/ask':
