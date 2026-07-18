@@ -11,9 +11,11 @@ import {
   type GuiSubAgentManager,
 } from '../src/gui-host/runtime';
 import { resolveConfig } from '../src/config/user-config';
+import { benchmarkWorkspaceDir } from '../src/storage/paths';
 import type { PermissionDecision, PromptImage } from '../src/tui/ipc';
 import type { SubAgent } from '../src/tui/state';
 import type { RuntimeCallbacks } from '../src/runtime/types';
+import type { BenchmarkRun } from '../src/benchmarks/types';
 
 class FakeProcess implements GuiProcess {
   readonly backend = 'flue' as const;
@@ -124,6 +126,47 @@ describe('GUI host commands', () => {
 
     const benchmarks = await runGuiCommand(runtime, workspace, '/server.mjs', '/benchmarks');
     expect(benchmarks.rows.join('\n')).not.toContain('TUI-only');
+  });
+
+  test('renders benchmark browser tabs and selection through GUI command output', async () => {
+    const { runtime, workspace } = fixture();
+    mkdirSync(join(workspace, 'benchmarks', 'regressions'), { recursive: true });
+    writeFileSync(join(workspace, 'benchmarks', 'regressions', 'dataset.toml'), '[dataset]\n');
+    const run: BenchmarkRun = {
+      benchmarkId: 'regressions',
+      benchmarkVersion: 'local',
+      completedAt: '2026-07-18T00:00:00.000Z',
+      id: 'run-a',
+      observed: true,
+      profileFingerprint: 'profile-a',
+      scaffold: 'lavalamp@test',
+      schemaVersion: 1,
+      trials: [
+        {
+          cost: 0,
+          durationMs: 1000,
+          failureCategory: 'retrieval',
+          reward: 0,
+          status: 'failed',
+          taskId: 'task-a',
+          tokens: 10,
+        },
+      ],
+    };
+    const runDir = join(benchmarkWorkspaceDir(workspace), 'runs');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, 'run-a.json'), JSON.stringify(run));
+
+    const failures = await runGuiCommand(
+      runtime,
+      workspace,
+      '/server.mjs',
+      '/benchmarks failures regressions',
+    );
+
+    expect(failures.rows.join('\n')).toContain('view: failures');
+    expect(failures.rows.join('\n')).toContain('› 1. regressions · custom');
+    expect(failures.rows.join('\n')).toContain('retrieval');
   });
 
   test('supports gateway status and changes through the GUI command path', async () => {

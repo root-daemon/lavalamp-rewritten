@@ -10,6 +10,7 @@ import { listCustomBenchmarks } from '../benchmarks/custom';
 import { BenchmarkRunStore } from '../benchmarks/run-store';
 import { officialBenchmarkSources } from '../benchmarks/sources';
 import {
+  type BenchmarkBrowserTab,
   createBenchmarkBrowserModel,
   renderBenchmarkDetails,
 } from '../tui/benchmarks';
@@ -278,7 +279,7 @@ export async function runGuiCommand(
     }
     case '/benchmark':
     case '/benchmarks':
-      return readBenchmarkSummary(workspace);
+      return readBenchmarkSummary(workspace, arg);
     case '/gateway':
       return setOrReadGateway(runtime, workspace, arg);
     case '/usage': {
@@ -640,7 +641,14 @@ function setOrReadSudo(workspace: string, arg: string): GuiCommandResult {
   };
 }
 
-function readBenchmarkSummary(workspace: string): GuiCommandResult {
+const BENCHMARK_TABS = new Set<BenchmarkBrowserTab>([
+  'overview',
+  'runs',
+  'failures',
+  'provenance',
+]);
+
+function readBenchmarkSummary(workspace: string, arg: string): GuiCommandResult {
   const catalog = new BenchmarkCatalog(
     benchmarkCacheDir(),
     officialBenchmarkSources(),
@@ -667,23 +675,80 @@ function readBenchmarkSummary(workspace: string): GuiCommandResult {
       ],
     };
   }
+  const options = parseBenchmarkArgs(arg);
+  model.tab = options.tab;
+  if (options.selector !== undefined) {
+    const selected = selectBenchmarkEntry(model.entries, options.selector);
+    if (selected === -1) {
+      return {
+        title: '/benchmarks',
+        rows: [
+          `No benchmark matches: ${options.selector}`,
+          'usage: /benchmarks [overview|runs|failures|provenance] [index-or-search]',
+        ],
+      };
+    }
+    model.selected = selected;
+  }
+  const selectedEntry = model.entries[model.selected];
   const rows = [
     `entries: ${entries.length} · saved runs: ${runs.length}`,
+    `view: ${model.tab} · selected: ${model.selected + 1}/${entries.length}`,
+    'usage: /benchmarks [overview|runs|failures|provenance] [index-or-search]',
     '',
-    ...entries.slice(0, 12).map((entry, index) => {
+    'suites & runs:',
+    ...entries.map((entry, index) => {
       const kind =
         entry.kind === 'public'
           ? entry.snapshot?.runnable
             ? 'public'
             : 'reference'
           : entry.kind;
-      return `${index + 1}. ${entry.label} · ${kind}`;
+      const marker = index === model.selected ? '›' : ' ';
+      return `${marker} ${index + 1}. ${entry.label} · ${kind}`;
     }),
     '',
-    'selected:',
+    selectedEntry === undefined ? 'selected:' : `selected: ${selectedEntry.label}`,
     ...renderBenchmarkDetails(model).split('\n'),
   ];
   return { title: '/benchmarks', rows };
+}
+
+function parseBenchmarkArgs(arg: string): {
+  selector?: string;
+  tab: BenchmarkBrowserTab;
+} {
+  const parts = arg.split(/\s+/).filter((part) => part.length > 0);
+  let tab: BenchmarkBrowserTab = 'overview';
+  const selectorParts: string[] = [];
+  for (const part of parts) {
+    if (BENCHMARK_TABS.has(part as BenchmarkBrowserTab)) {
+      tab = part as BenchmarkBrowserTab;
+    } else {
+      selectorParts.push(part);
+    }
+  }
+  return {
+    selector: selectorParts.length === 0 ? undefined : selectorParts.join(' '),
+    tab,
+  };
+}
+
+function selectBenchmarkEntry(
+  entries: { id: string; label: string }[],
+  selector: string,
+): number {
+  const asIndex = Number(selector);
+  if (Number.isInteger(asIndex) && asIndex >= 1 && asIndex <= entries.length) {
+    return asIndex - 1;
+  }
+  const needle = selector.toLowerCase();
+  return entries.findIndex(
+    (entry) =>
+      entry.id.toLowerCase() === needle ||
+      entry.id.toLowerCase().includes(needle) ||
+      entry.label.toLowerCase().includes(needle),
+  );
 }
 
 function readMcpConfig(): GuiCommandResult {
